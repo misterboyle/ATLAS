@@ -145,3 +145,6 @@ v2_5_1/
 
 # ----- Telemetry -----
 *.jsonl
+
+# ----- Python Virtual Environment -----
+.venv/
