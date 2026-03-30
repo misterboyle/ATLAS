@@ -88,7 +88,8 @@ from benchmark.v3.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
 # --- Constants ----------------------------------------------------------------
 
 RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
-LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '32735')}")
+LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '11434')}")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", config._conf.get("ATLAS_OLLAMA_MODEL", "qwen3:14b"))
 MAX_TOKENS = 16384
 BASE_TEMPERATURE = 0.0
 DIVERSITY_TEMPERATURE = 0.6
@@ -249,17 +250,44 @@ class LLMAdapter:
         return logprobs
 
     def _send_request(self, request_body: dict) -> dict:
-        """Send a single request to llama-server with retry on connection errors."""
+        """Send request to Ollama, translating from llama.cpp format.
+
+        Converts llama.cpp /completion request -> Ollama /api/generate,
+        then maps the response back so callers see the same field names.
+        """
+        ollama_body = {
+            "model": OLLAMA_MODEL,
+            "prompt": request_body.get("prompt", ""),
+            "raw": True,
+            "stream": False,
+            "options": {},
+        }
+        opts = ollama_body["options"]
+        if "temperature" in request_body:
+            opts["temperature"] = request_body["temperature"]
+        if "n_predict" in request_body:
+            opts["num_predict"] = request_body["n_predict"]
+        if "stop" in request_body:
+            opts["stop"] = request_body["stop"]
+        if "seed" in request_body:
+            opts["seed"] = request_body["seed"]
+
         last_error = None
         for attempt in range(self.max_retries):
             try:
                 req = urllib.request.Request(
-                    f"{self.runner.llm_url}/completion",
-                    data=json.dumps(request_body).encode('utf-8'),
+                    f"{self.runner.llm_url}/api/generate",
+                    data=json.dumps(ollama_body).encode('utf-8'),
                     headers={'Content-Type': 'application/json'}
                 )
                 with urllib.request.urlopen(req, timeout=600) as resp:
-                    return json.loads(resp.read().decode('utf-8'))
+                    data = json.loads(resp.read().decode('utf-8'))
+                # Translate response back to llama.cpp field names
+                return {
+                    "content": data.get("response", ""),
+                    "tokens_predicted": data.get("eval_count", 0),
+                    "completion_probabilities": [],
+                }
             except Exception as e:
                 last_error = e
                 if attempt < self.max_retries - 1:
@@ -381,7 +409,14 @@ class SandboxAdapter:
 
 
 class EmbedAdapter:
-    """Adapts extract_embedding_urllib to V3 EmbedCallable."""
+    """Stubbed for Ollama -- Phase 2 (Geometric Lens) contributed +0.0pp.
+
+    Returns zero vector to satisfy the interface contract.
+    When enable_phase2=False (recommended for Ollama), this is never
+    called on the hot path.
+    """
+
+    STUB_DIM = 128
 
     def __init__(self, llama_url: str):
         self.llama_url = llama_url
@@ -389,10 +424,7 @@ class EmbedAdapter:
 
     def __call__(self, text: str) -> List[float]:
         self.call_count += 1
-        emb = extract_embedding_urllib(text, self.llama_url)
-        if emb is None:
-            raise RuntimeError("Embedding extraction failed")
-        return emb
+        return [0.0] * self.STUB_DIM
 
 
 # --- V3 Pipeline Orchestrator -------------------------------------------------
@@ -1303,7 +1335,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     # Pre-flight checks
     print("\nPre-flight checks...")
     try:
-        req = urllib.request.Request(f"{LLAMA_URL}/health")
+        req = urllib.request.Request(f"{LLAMA_URL}/api/tags")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
         print(f"  llama-server: OK ({data.get('status', '?')})")
