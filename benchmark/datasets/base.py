@@ -2,6 +2,7 @@
 Abstract base class for benchmark datasets.
 """
 
+import os
 from abc import ABC, abstractmethod
 from typing import List, Iterator
 from pathlib import Path
@@ -27,11 +28,60 @@ class BaseDataset(ABC):
         Args:
             cache_dir: Directory for caching downloaded files.
                        Defaults to benchmark/datasets/.cache/
+                       In git worktrees, auto-discovers the main repo's
+                       cache to avoid redundant multi-minute downloads.
         """
-        self.cache_dir = cache_dir or config.cache_dir
+        self.cache_dir = cache_dir or self._resolve_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._tasks: List[BenchmarkTask] = []
         self._loaded = False
+
+    @staticmethod
+    def _resolve_cache_dir() -> Path:
+        """Resolve dataset cache, sharing across git worktrees.
+
+        Git worktrees each get their own atlas-src/ with an empty .cache/.
+        This causes multi-minute dataset re-downloads (5+ min for LCB)
+        that block inference and appear as "nothing happening" to users.
+
+        Detection: if the resolved cache path contains /.worktrees/<name>/,
+        we're in a worktree. Reconstruct the equivalent path under the main
+        repo root and use it if it has cached files.
+
+        Falls back to the default config.cache_dir if:
+          - Not in a worktree
+          - Main repo cache is also empty
+          - Any detection error occurs
+        """
+        default = config.cache_dir
+
+        # Fast path: default cache already has files
+        try:
+            if default.exists() and any(default.iterdir()):
+                return default
+        except OSError:
+            return default
+
+        # Detect worktree: path contains /.worktrees/<name>/
+        # Main repo root is the directory containing .worktrees/
+        try:
+            resolved = str(default.resolve())
+            marker = os.sep + ".worktrees" + os.sep
+            idx = resolved.find(marker)
+            if idx >= 0:
+                main_root = Path(resolved[:idx])
+                rest = resolved[idx + len(marker):]
+                # rest = "<name>/atlas-src/benchmark/datasets/.cache"
+                sep_idx = rest.find(os.sep)
+                if sep_idx >= 0:
+                    rel_path = rest[sep_idx + 1:]
+                    main_cache = main_root / rel_path
+                    if main_cache.exists() and any(main_cache.iterdir()):
+                        return main_cache
+        except Exception:
+            pass
+
+        return default
 
     @property
     @abstractmethod
