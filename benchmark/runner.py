@@ -31,6 +31,71 @@ try:
 except ImportError:
     HAS_RESOURCE = False
 
+# Optional: route execution through Docker sandbox HTTP API
+SANDBOX_URL = os.environ.get('SANDBOX_URL', '')
+
+
+def _execute_via_sandbox(code: str, test_code: str = '',
+                         timeout_sec: int = 30) -> Tuple[bool, str, str, float]:
+    """Execute code via the Docker sandbox HTTP API."""
+    full_code = f"{code}\n\n{test_code}" if test_code else code
+    payload = json.dumps({
+        "code": full_code,
+        "language": "python",
+        "timeout": timeout_sec,
+    }).encode()
+    req = urllib.request.Request(
+        f"{SANDBOX_URL}/execute",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        start = time.time()
+        resp = urllib.request.urlopen(req, timeout=timeout_sec + 30)
+        data = json.loads(resp.read())
+        elapsed_ms = (time.time() - start) * 1000
+        return data.get("success", False), data.get("stdout", ""), data.get("stderr", ""), elapsed_ms
+    except Exception as e:
+        return False, "", f"Sandbox error: {e}", 0.0
+
+
+def _execute_stdio_via_sandbox(code: str, test_inputs: list,
+                               test_outputs: list,
+                               timeout_sec: int = 30) -> Tuple[bool, str, str, float]:
+    """Execute stdio code via sandbox, one test case at a time."""
+    all_passed = True
+    combined_stdout = []
+    combined_stderr = []
+    total_ms = 0.0
+    for i, (inp, expected) in enumerate(zip(test_inputs, test_outputs)):
+        payload = json.dumps({
+            "code": code,
+            "language": "python",
+            "stdin": inp,
+            "timeout": timeout_sec,
+        }).encode()
+        req = urllib.request.Request(
+            f"{SANDBOX_URL}/execute",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            start = time.time()
+            resp = urllib.request.urlopen(req, timeout=timeout_sec + 30)
+            data = json.loads(resp.read())
+            elapsed_ms = (time.time() - start) * 1000
+            total_ms += elapsed_ms
+            actual = data.get("stdout", "").strip()
+            if actual != expected.strip():
+                all_passed = False
+            combined_stdout.append(f"Test {i+1}: {actual}")
+            combined_stderr.append(data.get("stderr", ""))
+        except Exception as e:
+            all_passed = False
+            combined_stderr.append(f"Test {i+1} sandbox error: {e}")
+            total_ms += 0.0
+    return all_passed, "\n".join(combined_stdout), "\n".join(combined_stderr), total_ms
+
 from .config import config
 from .models import BenchmarkTask, AttemptResult, TaskResult
 
@@ -174,6 +239,10 @@ def execute_code(
     Returns:
         Tuple of (passed, stdout, stderr, execution_time_ms)
     """
+    # Route through Docker sandbox if SANDBOX_URL is set
+    if SANDBOX_URL:
+        return _execute_via_sandbox(code, test_code, timeout_sec)
+
     # Combine code and tests
     full_code = f"{code}\n\n{test_code}"
 
@@ -247,6 +316,10 @@ def execute_code_stdio(
     """
     if not test_inputs or not test_outputs:
         return False, "", "No test cases provided for stdio evaluation", 0.0
+
+    # Route through Docker sandbox if SANDBOX_URL is set
+    if SANDBOX_URL:
+        return _execute_stdio_via_sandbox(code, test_inputs, test_outputs, timeout_sec)
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
         f.write(code)

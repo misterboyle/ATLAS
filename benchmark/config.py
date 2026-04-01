@@ -11,13 +11,39 @@ from typing import Optional
 
 
 def get_project_root() -> Path:
-    """Get the ATLAS project root directory."""
-    current = Path(__file__).resolve().parent
-    while current != current.parent:
-        if (current / "atlas.conf").exists():
-            return current
-        current = current.parent
+    """Get the ATLAS submodule root directory (where benchmark/ lives).
+
+    This always returns the atlas-src/ directory, regardless of where
+    atlas.conf is located.  All benchmark-relative paths (datasets,
+    results, etc.) are resolved from here.
+    """
     return Path(__file__).resolve().parent.parent
+
+
+def find_atlas_conf() -> 'Path | None':
+    """Locate atlas.conf by walking up from the submodule root.
+
+    Search order:
+      1. ATLAS_CONF environment variable (absolute path override)
+      2. Walk upward from the submodule root -- finds atlas.conf in
+         atlas-src/ (legacy) or the parent repo root (preferred).
+
+    Returns:
+        Path to atlas.conf, or None if not found.
+    """
+    env_path = os.environ.get("ATLAS_CONF")
+    if env_path:
+        p = Path(env_path).resolve()
+        if p.exists():
+            return p
+
+    current = get_project_root()
+    while current != current.parent:
+        candidate = current / "atlas.conf"
+        if candidate.exists():
+            return candidate
+        current = current.parent
+    return None
 
 
 def parse_atlas_conf() -> dict:
@@ -28,9 +54,9 @@ def parse_atlas_conf() -> dict:
         Dictionary of configuration values.
     """
     config = {}
-    conf_path = get_project_root() / "atlas.conf"
+    conf_path = find_atlas_conf()
 
-    if not conf_path.exists():
+    if conf_path is None:
         return config
 
     with open(conf_path, 'r') as f:
