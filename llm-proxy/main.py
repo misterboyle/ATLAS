@@ -102,7 +102,13 @@ def check_rate_limit(api_key: str, limit: int) -> Tuple[bool, int, int]:
 
 
 async def require_api_key(authorization: str = Header(None)) -> dict:
-    """Dependency to require valid API key. Returns validation data with rate limit info."""
+    """Dependency to require valid API key. Returns validation data with rate limit info.
+
+    When ALLOW_INTERNAL=true, requests without an Authorization header
+    are treated as trusted internal Docker network requests and bypass auth.
+    """
+    if not authorization and os.environ.get("ALLOW_INTERNAL", "").lower() == "true":
+        return {"key": "internal", "validation": {"rate_limit": 999999}}
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
 
