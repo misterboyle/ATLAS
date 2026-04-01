@@ -1654,7 +1654,7 @@ def load_lcb_tasks():
     return ds.tasks
 
 
-def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
+def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None, start_task=0,
                      enable_phase1=True, enable_phase2=True,
                      enable_phase3=True, selection_strategy="lens",
                      enable_feedback=False):
@@ -1676,6 +1676,7 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         "selection_strategy": selection_strategy,
         "enable_feedback": enable_feedback,
         "smoke_only": smoke_only,
+        "start_task": start_task,
         "max_tasks": max_tasks,
     }
     atomic_write_json(run_dir / "run_meta.json", meta)
@@ -1738,6 +1739,10 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     print("\nLoading LiveCodeBench...", end=" ", flush=True)
     tasks = load_lcb_tasks()
     print(f"{len(tasks)} tasks")
+
+    if start_task:
+        tasks = tasks[start_task:]
+        print(f"  START TASK: skipping first {start_task} tasks")
 
     if smoke_only:
         tasks = tasks[:10]
@@ -1804,6 +1809,8 @@ def main():
                         help="Smoke test (10 tasks only)")
     parser.add_argument("--max-tasks", type=int, default=None,
                         help="Limit number of tasks")
+    parser.add_argument("--start-task", type=int, default=0,
+                        help="Skip the first N tasks (0-indexed)")
     parser.add_argument("--no-phase1", action="store_true",
                         help="Disable Phase 1 features")
     parser.add_argument("--no-phase2", action="store_true",
@@ -1828,6 +1835,7 @@ def main():
         run_id=args.run_id,
         smoke_only=args.smoke,
         max_tasks=args.max_tasks,
+        start_task=args.start_task,
         enable_phase1=not args.no_phase1,
         enable_phase2=not args.no_phase2,
         enable_phase3=not args.no_phase3,
