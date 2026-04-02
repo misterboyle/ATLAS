@@ -32,6 +32,7 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))
 # Use direct llama access to bypass API auth for internal worker
 USE_DIRECT_LLAMA = os.getenv("USE_DIRECT_LLAMA", "true").lower() == "true"
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "Qwen3-14B-Q4_K_M.gguf")
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://atlas-dashboard:3001")
 
 class TaskWorker:
     def __init__(self):
@@ -117,6 +118,7 @@ class TaskWorker:
 
             # Record metrics
             self.metrics.record_task(task)
+            self._post_to_dashboard(task)
 
             # Store successful completions for training
             if result.success and result.final_code:
@@ -131,6 +133,7 @@ class TaskWorker:
             task.result = {"success": False, "error": str(e)}
             self.queue.update(task)
             self.queue.publish_completion(task.id)
+            self._post_to_dashboard(task)
 
     def _generate(self, prompt: str, context: Dict, temperature: float) -> GenerationResult:
         """Generate code using llama-server directly or via rag-api."""
@@ -247,6 +250,30 @@ class TaskWorker:
         # Store in Redis for later export
         self.queue.redis.rpush("training:examples", json_module.dumps(training_example))
         logger.info(f"Stored training example for task {task.id} (quality: {quality_score:.2f})")
+
+    def _post_to_dashboard(self, task):
+        """POST task result to dashboard for real-time visibility (pardot-jetb)."""
+        try:
+            payload = {
+                "task_id": task.id,
+                "type": getattr(task, "type", "coding"),
+                "status": task.status,
+                "success": task.result.get("success") if task.result else False,
+                "result": task.result,
+                "metrics": task.metrics,
+                "completed_at": task.completed_at,
+            }
+            resp = requests.post(
+                f"{DASHBOARD_URL}/api/validation/results",
+                json=payload,
+                timeout=5,
+            )
+            if resp.ok:
+                logger.info(f"Posted result for task {task.id} to dashboard")
+            else:
+                logger.warning(f"Dashboard POST returned {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"Failed to POST to dashboard: {e}")
 
     def _serialize_attempt(self, attempt) -> Dict:
         """Convert attempt to JSON-serializable dict."""

@@ -29,18 +29,22 @@ async def dashboard(request: Request):
 
     # Get today's metrics (use UTC to match task-worker)
     today = datetime.now(timezone.utc).date().isoformat()
-    daily_stats = redis_client.hgetall(f"metrics:daily:{today}")
+    daily_stats = redis_client.hgetall(f"atlas:metrics:daily:{today}")
 
     # Get recent tasks
-    recent_tasks = redis_client.lrange("metrics:recent_tasks", 0, 19)
+    recent_tasks = redis_client.lrange("atlas:metrics:recent_tasks", 0, 19)
     recent_tasks = [json.loads(t) for t in recent_tasks]
+
+    # Get recent validation results (from task-worker POST)
+    validation_results = redis_client.lrange("atlas:validation:results", 0, 9)
+    validation_results = [json.loads(r) for r in validation_results]
 
     # Get weekly trend (use UTC)
     weekly_trend = []
     utc_today = datetime.now(timezone.utc).date()
     for i in range(7):
         day = (utc_today - timedelta(days=i)).isoformat()
-        stats = redis_client.hgetall(f"metrics:daily:{day}")
+        stats = redis_client.hgetall(f"atlas:metrics:daily:{day}")
         weekly_trend.append({
             "date": day,
             "total": int(stats.get("tasks_total", 0)),
@@ -53,6 +57,7 @@ async def dashboard(request: Request):
         "queue_stats": queue_stats,
         "daily_stats": daily_stats,
         "recent_tasks": recent_tasks,
+        "validation_results": validation_results,
         "weekly_trend": weekly_trend
     })
 
@@ -67,12 +72,48 @@ async def api_stats():
             "p1": redis_client.llen("tasks:p1"),
             "p2": redis_client.llen("tasks:p2"),
         },
-        "daily": redis_client.hgetall(f"metrics:daily:{today}"),
+        "daily": redis_client.hgetall(f"atlas:metrics:daily:{today}"),
         "recent": [
             json.loads(t)
-            for t in redis_client.lrange("metrics:recent_tasks", 0, 9)
+            for t in redis_client.lrange("atlas:metrics:recent_tasks", 0, 9)
+        ],
+        "validation": [
+            json.loads(r)
+            for r in redis_client.lrange("atlas:validation:results", 0, 9)
         ]
     }
+
+@app.post("/api/validation/results")
+async def receive_validation_results(request: Request):
+    """Receive task results from task-worker for dashboard visibility (pardot-jetb)."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "error", "message": "Invalid JSON"}
+
+    task_id = payload.get("task_id", "unknown")
+
+    # Store full result for dashboard display
+    result_record = json.dumps({
+        "task_id": task_id,
+        "type": payload.get("type", "coding"),
+        "status": payload.get("status", "unknown"),
+        "success": payload.get("success", False),
+        "result": payload.get("result"),
+        "metrics": payload.get("metrics"),
+        "completed_at": payload.get("completed_at"),
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+    redis_client.lpush("atlas:validation:results", result_record)
+    redis_client.ltrim("atlas:validation:results", 0, 999)
+
+    return {"status": "ok", "task_id": task_id}
+
+@app.get("/api/validation/results")
+async def get_validation_results():
+    """Get recent validation results for dashboard display."""
+    results = redis_client.lrange("atlas:validation:results", 0, 19)
+    return [json.loads(r) for r in results]
 
 @app.get("/health")
 async def health():
