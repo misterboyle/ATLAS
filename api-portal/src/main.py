@@ -168,25 +168,25 @@ async def startup():
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """Landing page"""
-    return templates.TemplateResponse("index.html", {"request": request, "settings": settings})
+    return templates.TemplateResponse(request=request, name="index.html", context={"settings": settings})
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Login page"""
-    return templates.TemplateResponse("login.html", {"request": request, "settings": settings})
+    return templates.TemplateResponse(request=request, name="login.html", context={"settings": settings})
 
 
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request):
     """Registration page"""
-    return templates.TemplateResponse("register.html", {"request": request, "settings": settings})
+    return templates.TemplateResponse(request=request, name="register.html", context={"settings": settings})
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
     """Dashboard page (requires JS-side auth)"""
-    return templates.TemplateResponse("dashboard.html", {"request": request, "settings": settings})
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={"settings": settings})
 
 
 # ============ Auth API Routes ============
