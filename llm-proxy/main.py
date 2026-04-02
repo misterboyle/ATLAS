@@ -145,16 +145,16 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
         today = datetime.now(timezone.utc).date().isoformat()
 
         # Increment daily counters
-        redis_client.hincrby(f"metrics:daily:{today}", "tasks_total", 1)
-        redis_client.hincrby(f"metrics:daily:{today}", "requests_total", 1)  # Track requests
+        redis_client.hincrby(f"atlas:metrics:daily:{today}", "tasks_total", 1)
+        redis_client.hincrby(f"atlas:metrics:daily:{today}", "requests_total", 1)  # Track requests
         if success:
-            redis_client.hincrby(f"metrics:daily:{today}", "tasks_success", 1)
+            redis_client.hincrby(f"atlas:metrics:daily:{today}", "tasks_success", 1)
         else:
-            redis_client.hincrby(f"metrics:daily:{today}", "tasks_failed", 1)
-        redis_client.hincrby(f"metrics:daily:{today}", "total_tokens", tokens)
-        redis_client.hincrby(f"metrics:daily:{today}", "tokens_total", tokens)  # Alternative key
-        redis_client.hincrby(f"metrics:daily:{today}", "total_duration_ms", duration_ms)
-        redis_client.hincrby(f"metrics:daily:{today}", "total_attempts", 1)
+            redis_client.hincrby(f"atlas:metrics:daily:{today}", "tasks_failed", 1)
+        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_tokens", tokens)
+        redis_client.hincrby(f"atlas:metrics:daily:{today}", "tokens_total", tokens)  # Alternative key
+        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_duration_ms", duration_ms)
+        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_attempts", 1)
 
         # Add to recent tasks
         task_record = json.dumps({
@@ -167,8 +167,8 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
             "tokens": tokens,
             "completed_at": datetime.now(timezone.utc).isoformat()
         })
-        redis_client.lpush("metrics:recent_tasks", task_record)
-        redis_client.ltrim("metrics:recent_tasks", 0, 99)
+        redis_client.lpush("atlas:metrics:recent_tasks", task_record)
+        redis_client.ltrim("atlas:metrics:recent_tasks", 0, 99)
     except Exception as e:
         print(f"Failed to log metrics: {e}")
 
