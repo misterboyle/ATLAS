@@ -52,14 +52,17 @@ async def dashboard(request: Request):
         })
     weekly_trend.reverse()
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "queue_stats": queue_stats,
-        "daily_stats": daily_stats,
-        "recent_tasks": recent_tasks,
-        "validation_results": validation_results,
-        "weekly_trend": weekly_trend
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={
+            "queue_stats": queue_stats,
+            "daily_stats": daily_stats,
+            "recent_tasks": recent_tasks,
+            "validation_results": validation_results,
+            "weekly_trend": weekly_trend,
+        }
+    )
 
 @app.get("/api/stats")
 async def api_stats():
