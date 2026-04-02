@@ -145,12 +145,12 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
         today = datetime.now(timezone.utc).date().isoformat()
 
         # Increment daily counters
-        redis_client.hincrby(f"atlas:metrics:daily:{today}", "tasks_total", 1)
+        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total", 1)
         redis_client.hincrby(f"atlas:metrics:daily:{today}", "requests_total", 1)  # Track requests
         if success:
-            redis_client.hincrby(f"atlas:metrics:daily:{today}", "tasks_success", 1)
+            redis_client.hincrby(f"atlas:metrics:daily:{today}", "passed", 1)
         else:
-            redis_client.hincrby(f"atlas:metrics:daily:{today}", "tasks_failed", 1)
+            redis_client.hincrby(f"atlas:metrics:daily:{today}", "failed", 1)
         redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_tokens", tokens)
         redis_client.hincrby(f"atlas:metrics:daily:{today}", "tokens_total", tokens)  # Alternative key
         redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_duration_ms", duration_ms)
