@@ -263,6 +263,8 @@ async def chat_completions(request: Request, authorization: str = Header(None)):
     stream = body.get("stream", False)
 
     if stream:
+        # Ensure llama-server reports token usage in final SSE chunk
+        body.setdefault("stream_options", {})["include_usage"] = True
         # Streaming response - client must be created inside generator to stay open
         async def stream_with_metrics():
             tokens = 0
