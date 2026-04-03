@@ -177,6 +177,61 @@ def wrap_class_solution(code: str, task: BenchmarkTask) -> str:
     return preamble + "\n" + code + "\n\n" + harness
 
 
+def wrap_function_solution(code: str, task: BenchmarkTask) -> str:
+    """Wrap bare 'def <entry_point>(...)' code with a stdin/stdout harness.
+
+    When the LLM generates a function definition without calling it,
+    stdio evaluation gets empty stdout and the test fails. This wrapper
+    detects bare function definitions and appends a harness that reads
+    stdin, calls the function, and prints the result.
+
+    Returns the original code unchanged if:
+    - task is not stdio eval
+    - code already has input() calls (handles stdin itself)
+    - code has 'class Solution' (handled by wrap_class_solution)
+    - no matching function definition is found
+    """
+    if task.eval_mode != "stdio":
+        return code
+    if "input()" in code:
+        return code  # already handles stdin
+    if "class Solution" in code:
+        return code  # handled by wrap_class_solution
+
+    # Look for def <entry_point>(...) pattern
+    entry = task.entry_point or "solution"
+    sig_match = re.search(
+        rf'def {re.escape(entry)}\s*\((.*?)\)\s*(?:->.*?)?:',
+        code, re.DOTALL,
+    )
+    if not sig_match:
+        return code
+
+    params_str = sig_match.group(1).strip()
+
+    # Parse parameter names (ignore type annotations)
+    param_names = []
+    if params_str:
+        for p in params_str.split(','):
+            name = p.split(':')[0].strip()
+            if name:
+                param_names.append(name)
+
+    if not param_names:
+        # Zero-arg function -- just call it and print
+        return code + f"\n\nprint({entry}())\n"
+
+    # Build stdin reader + function call
+    reader_lines = ["import ast"]
+    for name in param_names:
+        reader_lines.append(f"{name} = ast.literal_eval(input())")
+    call_args = ", ".join(param_names)
+    reader_lines.append(f"print({entry}({call_args}))")
+
+    harness = "\n".join(reader_lines)
+    return code + "\n\n" + harness + "\n"
+
+
 def find_completed_tasks(phase_dir):
     completed = set()
     per_task_dir = Path(phase_dir) / "per_task"
@@ -435,6 +490,7 @@ class SandboxAdapter:
     def __call__(self, code: str, test_case: str) -> Tuple[bool, str, str]:
         self.call_count += 1
         code = wrap_class_solution(code, self.task)
+        code = wrap_function_solution(code, self.task)
 
         if self.self_verify_mode and self.custom_test_cases:
             return self._run_self_tests(code)
