@@ -1,252 +1,157 @@
-"""V3 Pipeline API endpoints -- REST facade for benchmark/v3/ modules."""
+"""V3 Pipeline service endpoint -- POST /v3/run wrapping V3Pipeline.run_task()."""
+
+import asyncio
+import logging
 import os
-import subprocess
 import sys
 import tempfile
-from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+_ATLAS_ROOT = Path(__file__).resolve().parent.parent
+if str(_ATLAS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ATLAS_ROOT))
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/v3", tags=["v3-pipeline"])
 
-_bp = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _bp not in sys.path:
-    sys.path.insert(0, _bp)
+_executor = ThreadPoolExecutor(max_workers=2)
 
 
-# -- Request / Response models ----------------------------------------------
+class RunMode(str, Enum):
+    FAST = "fast"
+    THOROUGH = "thorough"
 
-class PlanSearchRequest(BaseModel):
+
+class V3RunRequest(BaseModel):
     task_id: str
-    problem: str
-    max_plans: int = Field(default=7, ge=1, le=20)
-    step1_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    step2_temperature: float = Field(default=0.4, ge=0.0, le=2.0)
-    step3_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
-    constraint_response: Optional[str] = None
+    prompt: str
+    mode: RunMode = RunMode.FAST
+    test_code: Optional[str] = None
+    test_inputs: Optional[List[str]] = None
+    test_outputs: Optional[List[str]] = None
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
 
 
-class PlanSearchResponse(BaseModel):
+class V3RunResponse(BaseModel):
     task_id: str
     status: str
-    config: Dict
-    constraint_sets: List[Dict] = []
-    message: str = ""
-
-
-class BudgetForcingRequest(BaseModel):
-    task_id: str
-    raw_energy: Optional[float] = None
-    normalized_energy: Optional[float] = None
-    response_text: Optional[str] = None
-    default_tier: str = Field(default="standard")
-
-
-class BudgetForcingResponse(BaseModel):
-    task_id: str
-    tier: str
-    tier_config: Dict
-    system_prompt: str
-    max_tokens: int
-    normalized_energy: Optional[float] = None
-    thinking: Optional[Dict] = None
-
-
-class PRCoTRequest(BaseModel):
-    task_id: str
-    problem: str
     code: str
-    error: str = ""
-    max_repair_rounds: int = Field(default=3, ge=1, le=10)
-    repair_response: Optional[str] = None
+    phase_solved: str
+    candidates_generated: int
+    total_tokens: int
+    total_time_ms: float
+    telemetry: Dict[str, Any]
 
 
-class PRCoTResponse(BaseModel):
-    task_id: str
-    status: str
-    config: Dict
-    perspectives: List[str]
-    extracted_code: Optional[str] = None
-    message: str = ""
+def _run_v3_task(req: V3RunRequest) -> Dict[str, Any]:
+    """Synchronous entry point executed in the thread pool."""
+    from benchmark.models import BenchmarkTask
+    from benchmark.runner import BenchmarkRunner
+    from benchmark.v3_runner import V3Pipeline, LLMAdapter
+    from benchmark.v3.self_test_gen import SelfTestGen, SelfTestGenConfig
 
+    v3_llama_url = os.environ.get("V3_LLAMA_URL", "http://localhost:32735")
+    os.environ.setdefault("LLAMA_URL", v3_llama_url)
 
-class SelfTestGenRequest(BaseModel):
-    task_id: str
-    problem: str
-    num_test_cases: int = Field(default=5, ge=1, le=20)
-    generation_response: Optional[str] = None
+    has_stdio = bool(req.test_inputs and req.test_outputs)
+    has_functional = bool(req.test_code)
+    if has_stdio:
+        eval_mode = "stdio"
+    elif has_functional:
+        eval_mode = "functional"
+    else:
+        eval_mode = "stdio"
 
-
-class SelfTestGenResponse(BaseModel):
-    task_id: str
-    status: str
-    config: Dict
-    test_cases: List[Dict] = []
-    message: str = ""
-
-
-class SandboxRequest(BaseModel):
-    task_id: str
-    code: str
-    stdin: str = ""
-    timeout_seconds: int = Field(default=30, ge=1, le=120)
-
-
-class SandboxResponse(BaseModel):
-    task_id: str
-    status: str
-    stdout: str = ""
-    stderr: str = ""
-    exit_code: Optional[int] = None
-    timed_out: bool = False
-
-
-# -- Endpoints --------------------------------------------------------------
-
-@router.post("/plan-search", response_model=PlanSearchResponse)
-async def v3_plan_search(request: PlanSearchRequest):
-    """Configure PlanSearch and optionally parse constraint responses."""
-    try:
-        from benchmark.v3.plan_search import PlanSearchConfig, parse_constraint_sets
-    except ImportError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-    cfg = PlanSearchConfig(
-        enabled=True, max_plans=request.max_plans,
-        step1_temperature=request.step1_temperature,
-        step2_temperature=request.step2_temperature,
-        step3_temperature=request.step3_temperature,
-    )
-    cs = []
-    if request.constraint_response:
-        parsed = parse_constraint_sets(request.constraint_response, cfg.max_plans)
-        cs = [c.to_dict() for c in parsed]
-    return PlanSearchResponse(
-        task_id=request.task_id,
-        status="parsed" if cs else "configured",
-        config={"enabled": True, "max_plans": cfg.max_plans,
-                "step1_temperature": cfg.step1_temperature,
-                "step2_temperature": cfg.step2_temperature,
-                "step3_temperature": cfg.step3_temperature},
-        constraint_sets=cs,
-        message=f"Parsed {len(cs)} constraint sets" if cs
-                else "PlanSearch configured; supply constraint_response to parse",
+    task = BenchmarkTask(
+        task_id=req.task_id,
+        prompt=req.prompt,
+        eval_mode=eval_mode,
+        test_code=req.test_code or "",
+        test_inputs=req.test_inputs or [],
+        test_outputs=req.test_outputs or [],
     )
 
+    telemetry_dir = Path(tempfile.mkdtemp(prefix="v3_api_"))
+    runner = BenchmarkRunner(max_retries=4)
+    runner.llm_url = v3_llama_url
 
-@router.post("/budget-forcing", response_model=BudgetForcingResponse)
-async def v3_budget_forcing(request: BudgetForcingRequest):
-    """Select budget tier and optionally analyze thinking in a response."""
     try:
-        from benchmark.v3.budget_forcing import (
-            BudgetForcing, BudgetForcingConfig, normalize_energy,
-            get_system_prompt, extract_thinking, estimate_thinking_tokens,
+        enable_phase3 = req.mode == RunMode.THOROUGH
+
+        pipeline = V3Pipeline(
+            runner=runner,
+            telemetry_dir=telemetry_dir,
+            llama_url=v3_llama_url,
+            enable_phase1=True,
+            enable_phase2=True,
+            enable_phase3=enable_phase3,
         )
-    except ImportError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-    cfg = BudgetForcingConfig(enabled=True, default_tier=request.default_tier)
-    bf = BudgetForcing(cfg)
-    tier = bf.select_tier(raw_energy=request.raw_energy,
-                          normalized_energy=request.normalized_energy)
-    norm = None
-    if request.raw_energy is not None:
-        norm = normalize_energy(request.raw_energy)
-    elif request.normalized_energy is not None:
-        norm = request.normalized_energy
-    thinking = None
-    if request.response_text:
-        tt, ot = extract_thinking(request.response_text)
-        thinking = {
-            "thinking_text": tt[:500], "output_preview": ot[:500],
-            "estimated_tokens": estimate_thinking_tokens(tt),
-            "thinking_length": len(tt), "output_length": len(ot),
-        }
-    return BudgetForcingResponse(
-        task_id=request.task_id, tier=tier,
-        tier_config=bf.get_tier_config(tier),
-        system_prompt=get_system_prompt(tier),
-        max_tokens=bf.get_max_tokens(tier),
-        normalized_energy=norm, thinking=thinking,
-    )
 
+        if not has_stdio and not has_functional:
+            llm = LLMAdapter(runner)
+            self_test_gen = SelfTestGen(
+                SelfTestGenConfig(enabled=True),
+                telemetry_dir=telemetry_dir,
+            )
+            st_result = self_test_gen.generate(
+                problem=req.prompt, llm_call=llm, task_id=req.task_id,
+            )
+            if st_result.test_cases:
+                task.test_inputs = [
+                    tc.input_str for tc in st_result.test_cases
+                ]
+                task.test_outputs = [
+                    tc.expected_output for tc in st_result.test_cases
+                ]
+                logger.info(
+                    "SelfTestGen produced %d tests for task %s",
+                    len(st_result.test_cases), req.task_id,
+                )
 
-@router.post("/pr-cot", response_model=PRCoTResponse)
-async def v3_pr_cot(request: PRCoTRequest):
-    """Configure PR-CoT repair and optionally extract code from a response."""
-    try:
-        from benchmark.v3.pr_cot import (
-            PRCoTConfig, PERSPECTIVES, extract_code_from_repair,
-        )
-    except ImportError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-    cfg = PRCoTConfig(enabled=True, max_repair_rounds=request.max_repair_rounds)
-    extracted = None
-    if request.repair_response:
-        extracted = extract_code_from_repair(request.repair_response)
-    return PRCoTResponse(
-        task_id=request.task_id,
-        status="parsed" if extracted else "configured",
-        config={"enabled": True, "max_repair_rounds": cfg.max_repair_rounds,
-                "analysis_temperature": cfg.analysis_temperature,
-                "repair_temperature": cfg.repair_temperature},
-        perspectives=list(PERSPECTIVES.keys()),
-        extracted_code=extracted,
-        message="Extracted repair code" if extracted
-                else "PR-CoT configured with 4 perspectives",
-    )
-
-
-@router.post("/self-test-gen", response_model=SelfTestGenResponse)
-async def v3_self_test_gen(request: SelfTestGenRequest):
-    """Configure SelfTestGen and optionally parse test cases from a response."""
-    try:
-        from benchmark.v3.self_test_gen import SelfTestGenConfig, SelfTestGen
-    except ImportError as exc:
-        raise HTTPException(status_code=501, detail=str(exc))
-    cfg = SelfTestGenConfig(enabled=True, num_test_cases=request.num_test_cases)
-    cases = []
-    if request.generation_response:
-        gen = SelfTestGen(cfg)
-        parsed = gen.parse_test_cases(request.generation_response)
-        cases = [tc.to_dict() for tc in parsed]
-    return SelfTestGenResponse(
-        task_id=request.task_id,
-        status="parsed" if cases else "configured",
-        config={"enabled": True, "num_test_cases": cfg.num_test_cases,
-                "generation_temperature": cfg.generation_temperature,
-                "majority_threshold": cfg.majority_threshold},
-        test_cases=cases,
-        message=f"Parsed {len(cases)} test cases" if cases
-                else "SelfTestGen configured; supply generation_response to parse",
-    )
-
-
-@router.post("/sandbox", response_model=SandboxResponse)
-async def v3_sandbox(request: SandboxRequest):
-    """Execute Python code in an isolated subprocess with timeout."""
-    if not request.code.strip():
-        raise HTTPException(status_code=400, detail="Empty code")
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
-        tmp.write(request.code)
-        tmp_path = tmp.name
-    try:
-        result = subprocess.run(
-            [sys.executable, tmp_path], input=request.stdin,
-            capture_output=True, text=True, timeout=request.timeout_seconds,
-        )
-        return SandboxResponse(
-            task_id=request.task_id,
-            status="success" if result.returncode == 0 else "error",
-            stdout=result.stdout[:10000], stderr=result.stderr[:10000],
-            exit_code=result.returncode, timed_out=False,
-        )
-    except subprocess.TimeoutExpired:
-        return SandboxResponse(
-            task_id=request.task_id, status="timeout",
-            stderr=f"Exceeded {request.timeout_seconds}s limit", timed_out=True,
-        )
+        return pipeline.run_task(task, task_id=req.task_id)
     finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        runner.close()
+
+
+@router.post("/run", response_model=V3RunResponse)
+async def v3_run(request: V3RunRequest):
+    """Run a task through the V3 pipeline.
+
+    mode=fast:     Phase 1 only (generate + test candidates).
+    mode=thorough: Phase 1 + Phase 3 (refinement cascade).
+    """
+    loop = asyncio.get_running_loop()
+
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(_executor, _run_v3_task, request),
+            timeout=request.timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Task timed out after {request.timeout_seconds}s",
+        )
+    except Exception as e:
+        logger.exception("V3 pipeline error for task %s", request.task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    status = "solved" if result.get("passed") else "failed"
+
+    return V3RunResponse(
+        task_id=result.get("task_id", request.task_id),
+        status=status,
+        code=result.get("code", ""),
+        phase_solved=result.get("phase_solved", "none"),
+        candidates_generated=result.get("candidates_generated", 0),
+        total_tokens=result.get("total_tokens", 0),
+        total_time_ms=result.get("total_time_ms", 0.0),
+        telemetry=result.get("telemetry", {}),
+    )
