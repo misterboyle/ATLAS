@@ -1,4 +1,13 @@
-"""RAG pipeline — retrieval orchestration with PageIndex, Pattern Cache, and Confidence Router."""
+"""RAG pipeline — retrieval orchestration with PageIndex, Pattern Cache, and active Confidence Router.
+
+The Confidence Router estimates task difficulty via 4-signal fusion (pattern cache,
+retrieval confidence, query complexity, geometric energy) and selects a route via
+Thompson Sampling: CACHE_HIT -> FAST_PATH -> STANDARD -> HARD_PATH.
+
+HARD_PATH dispatches to the V3 pipeline (PlanSearch + Phase 3 PR-CoT repair).
+All other routes use direct llama generation with route-specific context and token budgets.
+Outcomes are fed back to Thompson Sampling for continuous learning.
+"""
 
 import asyncio
 import os
@@ -513,13 +522,75 @@ async def rag_enhanced_completion(
             logger.error(f"Confidence Router failed, defaulting to STANDARD: {e}")
             route_decision = None
 
-    # Context budget splitting:
-    # If cache has hits: PageIndex gets 6K, cache gets 2K
-    # If no cache hits: PageIndex gets full 8K
-    if cache_context:
-        context = build_context_prompt(chunks, PAGEINDEX_BUDGET)
+    # -- Route-aware dispatch ----------------------------------------
+    # Apply route-specific context/token budgets when router is active
+    if route_decision:
+        from models.route import Route, ROUTE_CONTEXT_BUDGET, ROUTE_MAX_TOKENS
+        ctx_budget = ROUTE_CONTEXT_BUDGET.get(route_decision.route, FULL_BUDGET)
+        route_max_tok = ROUTE_MAX_TOKENS.get(route_decision.route, max_tokens)
+        effective_max_tokens = min(max_tokens, route_max_tok)
+
+        # HARD_PATH: dispatch to V3 pipeline for deep analysis
+        if route_decision.route == Route.HARD_PATH and not stream:
+            try:
+                from v3_routes import _run_v3_task, V3RunRequest, RunMode
+                v3_req = V3RunRequest(
+                    task_id=f"router_{uuid.uuid4().hex[:8]}",
+                    prompt=query,
+                    mode=RunMode.THOROUGH,
+                    timeout_seconds=300,
+                )
+                loop = asyncio.get_event_loop()
+                v3_result = await loop.run_in_executor(None, _run_v3_task, v3_req)
+                v3_code = v3_result.get("code", "")
+                result = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+                    "object": "chat.completion",
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": v3_code},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {"total_tokens": v3_result.get("total_tokens", 0)},
+                    "_route_decision": {
+                        "route": route_decision.route.value,
+                        "difficulty_score": route_decision.difficulty_score,
+                        "difficulty_bin": route_decision.difficulty_bin.value,
+                        "retry_budget": route_decision.retry_budget,
+                        "signals": route_decision.signals.model_dump(),
+                        "thompson_samples": route_decision.thompson_samples,
+                    },
+                    "_v3_metadata": {
+                        "phase_solved": v3_result.get("phase_solved", "unknown"),
+                        "candidates_generated": v3_result.get("candidates_generated", 0),
+                        "total_time_ms": v3_result.get("total_time_ms", 0),
+                    },
+                }
+                # Record success feedback for Thompson Sampling
+                record_route_feedback(
+                    route_decision.route.value,
+                    route_decision.difficulty_bin.value,
+                    success=v3_result.get("status") == "success",
+                )
+                logger.info(
+                    f"HARD_PATH V3 dispatch complete: "
+                    f"phase={v3_result.get('phase_solved')} "
+                    f"candidates={v3_result.get('candidates_generated')}"
+                )
+                return result
+            except Exception as e:
+                logger.error(f"V3 pipeline dispatch failed, falling back to standard: {e}")
+                # Fall through to standard llama completion
     else:
-        context = build_context_prompt(chunks, FULL_BUDGET)
+        ctx_budget = FULL_BUDGET
+        effective_max_tokens = max_tokens
+
+    # Context budget splitting (route-aware):
+    if cache_context:
+        context = build_context_prompt(chunks, min(ctx_budget, PAGEINDEX_BUDGET))
+    else:
+        context = build_context_prompt(chunks, ctx_budget)
 
     system_prompt = build_system_prompt(context, cache_context)
 
@@ -531,12 +602,14 @@ async def rag_enhanced_completion(
         if msg.get("role") != "system":
             enhanced_messages.append(msg)
 
-    # Forward to llama
+    # Forward to llama (with route-capped max_tokens)
     if stream:
         return forward_to_llama_stream(
-            enhanced_messages, model, tools, max_tokens, **kwargs
+            enhanced_messages, model, tools, effective_max_tokens, **kwargs
         )
-    result = await forward_to_llama(enhanced_messages, model, tools, max_tokens, **kwargs)
+    result = await forward_to_llama(
+        enhanced_messages, model, tools, effective_max_tokens, **kwargs
+    )
 
     # Attach route decision to result for feedback recording
     if route_decision and isinstance(result, dict):
@@ -548,6 +621,13 @@ async def rag_enhanced_completion(
             "signals": route_decision.signals.model_dump(),
             "thompson_samples": route_decision.thompson_samples,
         }
+        # Auto-record feedback (assume success for non-V3 routes;
+        # external callers can correct via POST /internal/router/feedback)
+        record_route_feedback(
+            route_decision.route.value,
+            route_decision.difficulty_bin.value,
+            success=True,
+        )
 
     return result
 
