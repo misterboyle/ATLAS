@@ -1287,6 +1287,13 @@ class V3BenchmarkRunner:
                 flush=True,
             )
 
+            # -- Dashboard integration (fail-safe) --
+            try:
+                from benchmark.v3_dashboard_push import push_task
+                push_task(task_result, done, total, rate)
+            except Exception:
+                pass
+
         # Save phase summary
         passed = sum(1 for r in results.values() if r.get("passed"))
         summary = {
@@ -1452,6 +1459,13 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None, start_task=0
     print(f"  Results: {run_dir}", flush=True)
     print("=" * 60, flush=True)
     sys.stdout.flush()
+
+    # -- Dashboard summary push (fail-safe) --
+    try:
+        from benchmark.v3_dashboard_push import push_summary
+        push_summary(passed, total, rate, breakdown)
+    except Exception:
+        pass
 
     # Update metadata
     meta["end_time"] = datetime.now(timezone.utc).isoformat()
