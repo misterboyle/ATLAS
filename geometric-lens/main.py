@@ -83,6 +83,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# V3 Pipeline endpoints
+try:
+    from v3_routes import router as v3_router
+    app.include_router(v3_router)
+except ImportError:
+    logger.warning("V3 pipeline routes not available")
+
 
 # API Key validation cache (in-memory, short-lived)
 _key_cache: Dict[str, dict] = {}
