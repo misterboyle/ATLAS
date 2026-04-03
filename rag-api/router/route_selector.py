@@ -7,7 +7,8 @@ from typing import Dict, Optional, Tuple
 import redis as redis_lib
 
 from models.route import (
-    Route, DifficultyBin, ROUTE_COSTS, ROUTE_RETRY_BUDGET,
+    Route, DifficultyBin, FALLBACK_CHAIN, ROUTE_COSTS,
+    ROUTE_CONTEXT_BUDGET, ROUTE_MAX_TOKENS, ROUTE_RETRY_BUDGET,
     RouteDecision, SignalBundle, difficulty_to_bin,
 )
 
@@ -87,6 +88,8 @@ def select_route(
             difficulty_score=difficulty,
             difficulty_bin=d_bin,
             retry_budget=ROUTE_RETRY_BUDGET[Route.STANDARD],
+            context_budget=ROUTE_CONTEXT_BUDGET[Route.STANDARD],
+            max_tokens=ROUTE_MAX_TOKENS[Route.STANDARD],
             signals=signals,
             cache_hit_available=cache_hit_available,
         )
@@ -134,11 +137,48 @@ def select_route(
         difficulty_score=difficulty,
         difficulty_bin=d_bin,
         retry_budget=ROUTE_RETRY_BUDGET[selected],
+        context_budget=ROUTE_CONTEXT_BUDGET[selected],
+        max_tokens=ROUTE_MAX_TOKENS[selected],
         signals=signals,
         thompson_samples=samples,
         cache_hit_available=cache_hit_available,
     )
 
+
+
+def consume_retry_budget(decision: RouteDecision) -> Optional[RouteDecision]:
+    """Consume one retry attempt; fall back to next route when exhausted.
+
+    Returns an updated RouteDecision with decremented retry_budget, or
+    a new RouteDecision for the fallback route (with that route's own
+    context_budget and max_tokens).  Returns None when HARD_PATH budget
+    is fully exhausted (no further fallback available).
+    """
+    remaining = decision.retry_budget - 1
+    if remaining > 0:
+        return decision.model_copy(update={"retry_budget": remaining})
+
+    next_route = FALLBACK_CHAIN.get(decision.route)
+    if next_route is None:
+        logger.warning(
+            "Retry budget exhausted on %s -- no fallback available",
+            decision.route.value,
+        )
+        return None
+
+    logger.info(
+        "Fallback: %s -> %s (context=%d, max_tokens=%d)",
+        decision.route.value,
+        next_route.value,
+        ROUTE_CONTEXT_BUDGET[next_route],
+        ROUTE_MAX_TOKENS[next_route],
+    )
+    return decision.model_copy(update={
+        "route": next_route,
+        "retry_budget": ROUTE_RETRY_BUDGET[next_route],
+        "context_budget": ROUTE_CONTEXT_BUDGET[next_route],
+        "max_tokens": ROUTE_MAX_TOKENS[next_route],
+    })
 
 def get_all_thompson_states(r: redis_lib.Redis) -> Dict[str, Dict[str, dict]]:
     """Get all Thompson states for monitoring. Returns {bin: {route: {alpha, beta, mean, samples}}}."""
