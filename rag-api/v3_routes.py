@@ -71,6 +71,8 @@ def _run_v3_task(req: V3RunRequest) -> Dict[str, Any]:
 
     task = BenchmarkTask(
         task_id=req.task_id,
+        canonical_solution="",
+        entry_point="solution",
         prompt=req.prompt,
         eval_mode=eval_mode,
         test_code=req.test_code or "",
