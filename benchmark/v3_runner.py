@@ -1591,6 +1591,30 @@ class V3BenchmarkRunner:
 
         # Save phase summary (done counter updated by reference via results dict)
         done = len(results)
+            results[task.task_id] = task_result
+
+            # Save per-task result atomically
+            safe_name = task.task_id.replace('/', '_')
+            atomic_write_json(per_task_dir / f"{safe_name}.json", task_result)
+            done += 1
+            status = "PASS" if task_result["passed"] else "FAIL"
+            phase = task_result.get("phase_solved", "?")
+            elapsed = time.time() - self._start_time
+            rate = done / (elapsed / 3600) if elapsed > 0 else 0
+            tokens = task_result.get("total_tokens", 0)
+            print(
+                f"  [{done}/{total}] {task.task_id}: {status} "
+                f"(via {phase}, {tokens} tok) "
+                f"[{rate:.0f} tasks/hr]",
+                flush=True,
+            )
+            # -- Dashboard integration (fail-safe) --
+            try:
+                from benchmark.v3_dashboard_push import push_task
+                push_task(task_result, done, total, rate)
+            except Exception:
+                pass
+        # Save phase summary
         passed = sum(1 for r in results.values() if r.get("passed"))
         summary = {
             "phase": phase_name,
@@ -1867,6 +1891,13 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None, start_task=0
     print(f"  Results: {run_dir}", flush=True)
     print("=" * 60, flush=True)
     sys.stdout.flush()
+
+    # -- Dashboard summary push (fail-safe) --
+    try:
+        from benchmark.v3_dashboard_push import push_summary
+        push_summary(passed, total, rate, breakdown)
+    except Exception:
+        pass
 
     # Update metadata
     meta["end_time"] = datetime.now(timezone.utc).isoformat()
