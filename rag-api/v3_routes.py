@@ -27,6 +27,7 @@ _executor = ThreadPoolExecutor(max_workers=2)
 class RunMode(str, Enum):
     FAST = "fast"
     THOROUGH = "thorough"
+    AUTO = "auto"
 
 
 class V3RunRequest(BaseModel):
@@ -85,7 +86,8 @@ def _run_v3_task(req: V3RunRequest) -> Dict[str, Any]:
     runner.llm_url = v3_llama_url
 
     try:
-        enable_phase3 = req.mode == RunMode.THOROUGH
+        enable_phase3 = req.mode in (RunMode.THOROUGH, RunMode.AUTO)
+        auto_phase3 = req.mode == RunMode.AUTO
 
         pipeline = V3Pipeline(
             runner=runner,
@@ -94,6 +96,7 @@ def _run_v3_task(req: V3RunRequest) -> Dict[str, Any]:
             enable_phase1=True,
             enable_phase2=True,
             enable_phase3=enable_phase3,
+            auto_phase3=auto_phase3,
         )
 
         if not has_stdio and not has_functional:

@@ -598,6 +598,8 @@ class V3Pipeline:
                  enable_phase3: bool = True,
                  enable_feedback: bool = False,
                  selection_strategy: str = "lens"):
+                 auto_phase3: bool = False,
+                 enable_feedback: bool = False):
         self.runner = runner
         self.telemetry_dir = telemetry_dir
         self.llama_url = llama_url
@@ -605,6 +607,7 @@ class V3Pipeline:
         self.enable_phase2 = enable_phase2
         self.enable_phase3 = enable_phase3
         self.selection_strategy = selection_strategy
+        self.auto_phase3 = auto_phase3
 
         # Read V3 config from atlas.conf (with defaults)
         self._v3_conf = self._load_v3_config()
@@ -1247,6 +1250,20 @@ class V3Pipeline:
             self._record_feedback(task_id, result)
             self._log_v3_event(task_id, result)
             return result
+
+        # Auto mode: gate Phase 3 on problem difficulty (Lens energy).
+        # Easy problems (energy_norm < 0.15) skip Phase 3 -- not worth
+        # the compute. Hard problems engage Phase 3 automatically.
+        if self.auto_phase3:
+            _norm = (probe_candidate or {}).get("energy_norm", 0.5)
+            result["telemetry"]["auto_probe_energy_norm"] = _norm
+            if probe_energy_raw is not None and _norm < 0.15:
+                result["telemetry"]["phase3_auto_skipped"] = True
+                result["total_time_ms"] = (time.time() - start_time) * 1000
+                self._record_feedback(task_id, result)
+                self._log_v3_event(task_id, result)
+                return result
+            result["telemetry"]["phase3_auto_engaged"] = True
 
         # Build failing candidates list for Phase 3 (with actual error output)
         failing = [

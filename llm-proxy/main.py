@@ -184,6 +184,7 @@ ATLAS_V3_MODELS = [
     {"id": "atlas-v3", "object": "model", "created": 1700000000, "owned_by": "atlas"},
     {"id": "atlas-v3-fast", "object": "model", "created": 1700000000, "owned_by": "atlas"},
     {"id": "atlas-v3-thorough", "object": "model", "created": 1700000000, "owned_by": "atlas"},
+    {"id": "atlas-v3-auto", "object": "model", "created": 1700000000, "owned_by": "atlas"},
 ]
 
 
@@ -203,12 +204,18 @@ async def handle_v3_request(body, model, start_time, rate_headers):
             break
     if not prompt:
         raise HTTPException(status_code=400, detail="No user message found")
-    mode = "thorough" if model.endswith("-thorough") else "fast"
+    if model.endswith("-thorough"):
+        mode = "thorough"
+    elif model.endswith("-auto") or model == "atlas-v3":
+        mode = "auto"
+    else:
+        mode = "fast"
+    timeout_s = 900 if mode in ("thorough", "auto") else 300
     try:
-        async with httpx.AsyncClient(timeout=600.0) as rc:
+        async with httpx.AsyncClient(timeout=max(600.0, timeout_s + 60)) as rc:
             resp = await rc.post(
                 f"{RAG_API_URL}/v3/run",
-                json={"task_id": f"chat-{uuid.uuid4().hex[:8]}", "prompt": prompt, "mode": mode},
+                json={"task_id": f"chat-{uuid.uuid4().hex[:8]}", "prompt": prompt, "mode": mode, "timeout_seconds": timeout_s},
             )
             duration_ms = int((time.time() - start_time) * 1000)
             if resp.status_code != 200:
