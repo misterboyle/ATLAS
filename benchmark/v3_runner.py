@@ -44,7 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-# Force line-buffered stdout
+# Force unbuffered stdout for Docker/piped environments
+os.environ["PYTHONUNBUFFERED"] = "1"
 sys.stdout.reconfigure(line_buffering=True)
 
 # Add parent to path
@@ -1181,7 +1182,7 @@ class V3BenchmarkRunner:
         done = len(completed)
 
         if completed:
-            print(f"  Resuming: {done}/{total} complete, {len(remaining)} remaining")
+            print(f"  Resuming: {done}/{total} complete, {len(remaining)} remaining", flush=True)
 
         # Load already-completed results
         results: Dict[str, Dict] = {}
@@ -1292,34 +1293,35 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None, start_task=0
     }
     atomic_write_json(run_dir / "run_meta.json", meta)
 
-    print("=" * 60)
-    print(f"  ATLAS V3 Benchmark")
-    print(f"  Run ID: {run_id}")
-    print(f"  Results: {run_dir}")
-    print(f"  Phase 1: {'ON' if enable_phase1 else 'OFF'}")
-    print(f"  Phase 2: {'ON' if enable_phase2 else 'OFF'}")
-    print(f"  Phase 3: {'ON' if enable_phase3 else 'OFF'}")
-    print("=" * 60)
+    print("=" * 60, flush=True)
+    print(f"  ATLAS V3 Benchmark", flush=True)
+    print(f"  Run ID: {run_id}", flush=True)
+    print(f"  Results: {run_dir}", flush=True)
+    print(f"  Phase 1: {'ON' if enable_phase1 else 'OFF'}", flush=True)
+    print(f"  Phase 2: {'ON' if enable_phase2 else 'OFF'}", flush=True)
+    print(f"  Phase 3: {'ON' if enable_phase3 else 'OFF'}", flush=True)
+    print("=" * 60, flush=True)
+    sys.stdout.flush()
 
     # Pre-flight checks
-    print("\nPre-flight checks...")
+    print("\nPre-flight checks...", flush=True)
     try:
         req = urllib.request.Request(f"{LLAMA_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-        print(f"  llama-server: OK ({data.get('status', '?')})")
+        print(f"  llama-server: OK ({data.get('status', '?')})", flush=True)
     except Exception as e:
-        print(f"  llama-server: FAILED ({e})")
-        print("  Aborting benchmark — llama-server not reachable")
+        print(f"  llama-server: FAILED ({e})", flush=True)
+        print("  Aborting benchmark — llama-server not reachable", flush=True)
         return None
 
     try:
         req = urllib.request.Request(f"{RAG_API_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-        print(f"  RAG API: OK ({data.get('status', '?')})")
+        print(f"  RAG API: OK ({data.get('status', '?')})", flush=True)
     except Exception:
-        print("  RAG API: WARNING — lens scoring unavailable")
+        print("  RAG API: WARNING — lens scoring unavailable", flush=True)
 
     # Check Lens model availability
     try:
@@ -1332,32 +1334,34 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None, start_task=0
         with urllib.request.urlopen(req, timeout=10) as resp:
             lens_data = json.loads(resp.read().decode('utf-8'))
         if lens_data.get("error"):
-            print(f"  Lens model: NOT LOADED ({lens_data['error']})")
-            print("    Phase 2 (adaptive K) will use default k=3")
+            print(f"  Lens model: NOT LOADED ({lens_data['error']})", flush=True)
+            print("    Phase 2 (adaptive K) will use default k=3", flush=True)
         else:
-            print(f"  Lens model: OK (energy={lens_data.get('energy', '?')})")
+            print(f"  Lens model: OK (energy={lens_data.get('energy', '?')})", flush=True)
     except Exception:
-        print("  Lens model: UNAVAILABLE — Phase 2 will use default k=3")
+        print("  Lens model: UNAVAILABLE — Phase 2 will use default k=3", flush=True)
+    sys.stdout.flush()
 
     # Load dataset
     print("\nLoading LiveCodeBench...", end=" ", flush=True)
     tasks = load_lcb_tasks()
-    print(f"{len(tasks)} tasks")
+    print(f"{len(tasks)} tasks", flush=True)
 
     if start_task:
         tasks = tasks[start_task:]
-        print(f"  START TASK: skipping first {start_task} tasks")
+        print(f"  START TASK: skipping first {start_task} tasks", flush=True)
 
     if smoke_only:
         tasks = tasks[:10]
-        print(f"  SMOKE MODE: running {len(tasks)} tasks only")
+        print(f"  SMOKE MODE: running {len(tasks)} tasks only", flush=True)
     elif max_tasks:
         tasks = tasks[:max_tasks]
-        print(f"  LIMITED MODE: running {len(tasks)} tasks")
+        print(f"  LIMITED MODE: running {len(tasks)} tasks", flush=True)
 
     # Run benchmark
-    print(f"\nRunning V3 pipeline on {len(tasks)} tasks...")
-    print("-" * 60)
+    print(f"\nRunning V3 pipeline on {len(tasks)} tasks...", flush=True)
+    print("-" * 60, flush=True)
+    sys.stdout.flush()
 
     with V3BenchmarkRunner(
         run_dir,
@@ -1368,8 +1372,8 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None, start_task=0
         results = runner.run_lcb(tasks)
 
         # Post-benchmark analysis
-        print("\n" + "-" * 60)
-        print("Post-benchmark analysis...")
+        print("\n" + "-" * 60, flush=True)
+        print("Post-benchmark analysis...", flush=True)
         runner.pipeline.collect_benchmark_results(results)
 
     # Summary
@@ -1383,14 +1387,15 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None, start_task=0
         phase = r.get("phase_solved", "none")
         breakdown[phase] = breakdown.get(phase, 0) + 1
 
-    print("\n" + "=" * 60)
-    print(f"  V3 BENCHMARK COMPLETE")
-    print(f"  pass@1: {passed}/{total} ({rate*100:.1f}%)")
-    print(f"  Solved by:")
+    print("\n" + "=" * 60, flush=True)
+    print(f"  V3 BENCHMARK COMPLETE", flush=True)
+    print(f"  pass@1: {passed}/{total} ({rate*100:.1f}%)", flush=True)
+    print(f"  Solved by:", flush=True)
     for phase, count in sorted(breakdown.items()):
-        print(f"    {phase}: {count}")
-    print(f"  Results: {run_dir}")
-    print("=" * 60)
+        print(f"    {phase}: {count}", flush=True)
+    print(f"  Results: {run_dir}", flush=True)
+    print("=" * 60, flush=True)
+    sys.stdout.flush()
 
     # Update metadata
     meta["end_time"] = datetime.now(timezone.utc).isoformat()
@@ -1439,7 +1444,7 @@ def main():
     )
 
     if run_dir:
-        print(f"\nResults saved to: {run_dir}")
+        print(f"\nResults saved to: {run_dir}", flush=True)
 
 
 if __name__ == "__main__":
