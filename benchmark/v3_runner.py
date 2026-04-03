@@ -477,6 +477,9 @@ class V3Pipeline:
         # Read V3 config from atlas.conf (with defaults)
         self._v3_conf = self._load_v3_config()
 
+        # Per-task time budget (0 = no limit)
+        self.task_timeout_s = self._v3_conf.get("task_timeout_s", 300)
+
         # Initialize V3 components
         self._init_phase1(telemetry_dir)
         self._init_phase2(telemetry_dir)
@@ -524,6 +527,9 @@ class V3Pipeline:
             ).lower() in ("true", "1")
             v3["feedback_interval"] = int(conf.get(
                 "ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL", "50",
+            ))
+            v3["task_timeout_s"] = int(conf.get(
+                "ATLAS_V3_TASK_TIMEOUT_S", "300",
             ))
         except Exception:
             pass
@@ -615,6 +621,27 @@ class V3Pipeline:
             ),
             telemetry_dir=telemetry_dir,
         ) if enable_feedback else None
+
+    def _is_timed_out(self, start_time: float) -> bool:
+        """Check if per-task time budget is exceeded."""
+        if self.task_timeout_s <= 0:
+            return False
+        return (time.time() - start_time) > self.task_timeout_s
+
+    def _timeout_return(self, result: Dict, llm: LLMAdapter,
+                        start_time: float, task_id: str,
+                        phase_label: str) -> Dict[str, Any]:
+        """Build graceful timeout return with best result so far."""
+        result["telemetry"]["timeout"] = True
+        result["telemetry"]["timeout_phase"] = phase_label
+        result["telemetry"]["timeout_elapsed_s"] = round(
+            time.time() - start_time, 1,
+        )
+        result["total_tokens"] = llm.total_tokens
+        result["total_time_ms"] = (time.time() - start_time) * 1000
+        self._record_feedback(task_id, result)
+        self._log_v3_event(task_id, result)
+        return result
 
     def run_task(self, task: BenchmarkTask, task_id: str = "") -> Dict[str, Any]:
         """Run a single task through the full V3 pipeline.
@@ -960,6 +987,12 @@ class V3Pipeline:
             self_verify_sandbox = sandbox
             result["telemetry"]["self_test_fallback"] = True
 
+        # --- Time budget check (before PR-CoT) ---
+        if self._is_timed_out(start_time):
+            return self._timeout_return(
+                result, llm, start_time, task_id, "before_pr_cot",
+            )
+
         # Step 3a: PR-CoT Quick Repair (uses self-verify sandbox)
         if failing:
             try:
@@ -998,6 +1031,12 @@ class V3Pipeline:
             self._log_v3_event(task_id, result)
             return result
 
+        # --- Time budget check (before refinement loop) ---
+        if self._is_timed_out(start_time):
+            return self._timeout_return(
+                result, llm, start_time, task_id, "before_refinement",
+            )
+
         # Step 3b: Full Refinement Loop (uses self-verify sandbox)
         try:
             ref_result = self.refinement_loop.run(
@@ -1028,6 +1067,12 @@ class V3Pipeline:
             self._record_feedback(task_id, result)
             self._log_v3_event(task_id, result)
             return result
+
+        # --- Time budget check (before derivation chains) ---
+        if self._is_timed_out(start_time):
+            return self._timeout_return(
+                result, llm, start_time, task_id, "before_derivation",
+            )
 
         # Step 3c: Derivation Chains (real sandbox — sub-problems have own test cases)
         try:
