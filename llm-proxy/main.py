@@ -351,26 +351,66 @@ async def proxy_all(request: Request, path: str, authorization: str = Header(Non
         )
 
     rate_headers = get_rate_limit_headers(rate_limit, remaining, reset)
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        url = f"{LLAMA_URL}/{path}"
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            url = f"{LLAMA_URL}/{path}"
 
-        if request.method == "GET":
-            resp = await client.get(url, params=request.query_params)
-        else:
-            body = await request.body()
-            resp = await client.request(
-                request.method,
-                url,
-                content=body,
-                headers={"Content-Type": request.headers.get("Content-Type", "application/json")}
+            if request.method == "GET":
+                resp = await client.get(url, params=request.query_params)
+            else:
+                body = await request.body()
+                resp = await client.request(
+                    request.method,
+                    url,
+                    content=body,
+                    headers={"Content-Type": request.headers.get("Content-Type", "application/json")}
+                )
+
+            response_headers = dict(rate_headers)
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type"),
+                headers=response_headers
             )
-
-        response_headers = dict(rate_headers)
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            media_type=resp.headers.get("content-type"),
-            headers=response_headers
+    except httpx.ReadTimeout:
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": {
+                    "message": f"Backend timeout: llama-server did not respond within 60s for /{path}",
+                    "type": "timeout_error",
+                    "code": "read_timeout",
+                    "param": path
+                }
+            },
+            headers=rate_headers
+        )
+    except httpx.ConnectError:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": {
+                    "message": f"Backend unavailable: cannot connect to llama-server for /{path}",
+                    "type": "backend_error",
+                    "code": "connect_error",
+                    "param": path
+                }
+            },
+            headers=rate_headers
+        )
+    except httpx.HTTPError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": {
+                    "message": f"Backend error: {type(exc).__name__} for /{path}",
+                    "type": "backend_error",
+                    "code": "proxy_error",
+                    "param": path
+                }
+            },
+            headers=rate_headers
         )
 
 
