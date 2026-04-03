@@ -611,6 +611,8 @@ class V3Pipeline:
 
         # Embedding store for post-hoc analysis (V3.1 Section 5.2)
         self._emb_writer = EmbeddingWriter(telemetry_dir / "embeddings.emb")
+        # Per-task time budget (0 = no limit)
+        self.task_timeout_s = self._v3_conf.get("task_timeout_s", 300)
 
         # Initialize V3 components
         self._init_phase1(telemetry_dir)
@@ -659,6 +661,9 @@ class V3Pipeline:
             ).lower() in ("true", "1")
             v3["feedback_interval"] = int(conf.get(
                 "ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL", "50",
+            ))
+            v3["task_timeout_s"] = int(conf.get(
+                "ATLAS_V3_TASK_TIMEOUT_S", "300",
             ))
         except Exception:
             pass
@@ -751,6 +756,27 @@ class V3Pipeline:
             ),
             telemetry_dir=telemetry_dir,
         ) if enable_feedback else None
+
+    def _is_timed_out(self, start_time: float) -> bool:
+        """Check if per-task time budget is exceeded."""
+        if self.task_timeout_s <= 0:
+            return False
+        return (time.time() - start_time) > self.task_timeout_s
+
+    def _timeout_return(self, result: Dict, llm: LLMAdapter,
+                        start_time: float, task_id: str,
+                        phase_label: str) -> Dict[str, Any]:
+        """Build graceful timeout return with best result so far."""
+        result["telemetry"]["timeout"] = True
+        result["telemetry"]["timeout_phase"] = phase_label
+        result["telemetry"]["timeout_elapsed_s"] = round(
+            time.time() - start_time, 1,
+        )
+        result["total_tokens"] = llm.total_tokens
+        result["total_time_ms"] = (time.time() - start_time) * 1000
+        self._record_feedback(task_id, result)
+        self._log_v3_event(task_id, result)
+        return result
 
     def run_task(self, task: BenchmarkTask, task_id: str = "") -> Dict[str, Any]:
         """Run a single task through the full V3 pipeline.
@@ -1262,6 +1288,12 @@ class V3Pipeline:
         phase3_strategies_tried = []
 
         # --- Strategy 1: PR-CoT quick repair (2-6 LLM calls) ---
+        # --- Time budget check (before PR-CoT) ---
+        if self._is_timed_out(start_time):
+            return self._timeout_return(
+                result, llm, start_time, task_id, "before_pr_cot",
+            )
+        # Step 3a: PR-CoT Quick Repair (uses self-verify sandbox)
         if failing:
             phase3_strategies_tried.append("pr_cot")
             pr_llm = LLMAdapter(self.runner, timeout=300)
@@ -1357,9 +1389,53 @@ class V3Pipeline:
                     llm_call=dc_llm,
                     sandbox_run=sandbox,
                     task_id=task_id,
-                )
                 phase3_extra_tokens += dc_llm.total_tokens
                 if dc_result.solved and dc_result.final_code:
+        # --- Time budget check (before refinement loop) ---
+        if self._is_timed_out(start_time):
+            return self._timeout_return(
+                result, llm, start_time, task_id, "before_refinement",
+            )
+        # Step 3b: Full Refinement Loop (uses self-verify sandbox)
+        try:
+            ref_result = self.refinement_loop.run(
+                problem=task.prompt,
+                failing_candidates=failing,
+                original_constraints=constraints,
+                llm_call=llm,
+                sandbox_run=self_verify_sandbox,  # Self-verify, not real tests
+                embed_call=embed,
+                metacognitive_warnings=metacog_warnings,
+                task_id=task_id,
+            if ref_result.solved:
+                # Self-tests pass — verify with real tests for final score
+                real_passed, _, _ = sandbox(ref_result.winning_code, "")
+                if real_passed:
+                    result["passed"] = True
+                    result["code"] = ref_result.winning_code
+                    result["phase_solved"] = "refinement"
+                    result["telemetry"]["refinement_iterations"] = ref_result.total_iterations
+        except Exception as e:
+            result["telemetry"]["refinement_error"] = str(e)
+        if result["passed"]:
+            self._learn_from_success(task, task_id, "refinement")
+            result["total_tokens"] = llm.total_tokens
+            result["total_time_ms"] = (time.time() - start_time) * 1000
+            self._record_feedback(task_id, result)
+            self._log_v3_event(task_id, result)
+            return result
+        # --- Time budget check (before derivation chains) ---
+                result, llm, start_time, task_id, "before_derivation",
+        # Step 3c: Derivation Chains (real sandbox — sub-problems have own test cases)
+            failure_context = "; ".join(
+                f"Candidate {c['index']}: {c.get('stderr', 'failed')[:200]}"
+                for c in candidates if c.get("passed") is False
+            dc_result = self.derivation_chains.solve(
+                failure_context=failure_context,
+                sandbox_run=sandbox,
+            if dc_result.solved and dc_result.final_code:
+                try:
+                    # Verify with real tests for final score
                     passed, stdout, stderr = sandbox(dc_result.final_code, "")
                     if passed:
                         result["passed"] = True
