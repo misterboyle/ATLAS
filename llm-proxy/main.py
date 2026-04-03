@@ -201,10 +201,10 @@ async def handle_v3_request(body, model, start_time, rate_headers):
         raise HTTPException(status_code=400, detail="No user message found")
     mode = "thorough" if model.endswith("-thorough") else "fast"
     try:
-        async with httpx.AsyncClient(timeout=300.0) as rc:
+        async with httpx.AsyncClient(timeout=600.0) as rc:
             resp = await rc.post(
                 f"{RAG_API_URL}/v3/run",
-                json={"prompt": prompt, "mode": mode},
+                json={"task_id": f"chat-{uuid.uuid4().hex[:8]}", "prompt": prompt, "mode": mode},
             )
             duration_ms = int((time.time() - start_time) * 1000)
             if resp.status_code != 200:
@@ -234,10 +234,10 @@ async def handle_v3_request(body, model, start_time, rate_headers):
                      "type": "backend_error", "code": "proxy_error"}},
             headers=rate_headers,
         )
-    answer = rag_result.get("answer", rag_result.get("result", ""))
+    answer = rag_result.get("code", rag_result.get("answer", rag_result.get("result", "")))
     v3_meta = {"mode": mode, "rag_model": model}
-    for k in ("sources", "chunks", "confidence", "retrieval_time_ms",
-              "generation_time_ms"):
+    for k in ("phase_solved", "status", "candidates_generated",
+              "total_tokens", "total_time_ms", "telemetry"):
         if k in rag_result:
             v3_meta[k] = rag_result[k]
     pt, ct = len(prompt.split()), len(answer.split())
@@ -366,7 +366,7 @@ async def chat_completions(request: Request, authorization: str = Header(None)):
         # Streaming response - client must be created inside generator to stay open
         async def stream_with_metrics():
             tokens = 0
-            client = httpx.AsyncClient(timeout=300.0)
+            client = httpx.AsyncClient(timeout=600.0)
             try:
                 async with client.stream(
                     "POST",
@@ -405,7 +405,7 @@ async def chat_completions(request: Request, authorization: str = Header(None)):
         )
     else:
         # Non-streaming
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=600.0) as client:
             try:
                 resp = await client.post(
                     f"{LLAMA_URL}/v1/chat/completions",
