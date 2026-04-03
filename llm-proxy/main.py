@@ -206,7 +206,7 @@ async def handle_v3_request(body, model, start_time, rate_headers):
         mode = "auto"
     else:
         mode = "fast"
-    timeout_s = 900 if mode in ("thorough", "auto") else 300
+    timeout_s = 1800 if mode in ("thorough", "auto") else 300
     try:
         async with httpx.AsyncClient(timeout=max(600.0, timeout_s + 60)) as rc:
             resp = await rc.post(
