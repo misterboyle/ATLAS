@@ -65,8 +65,8 @@ def check_completion(line, r):
         "rate_tasks_hr": 0,
         "summary": f"BENCHMARK COMPLETE: {passed}/{total} passed ({rate}%)",
     })
-    r.lpush("metrics:recent_tasks", entry)
-    r.ltrim("metrics:recent_tasks", 0, 49)
+    r.lpush("atlas:metrics:recent_tasks", entry)
+    r.ltrim("atlas:metrics:recent_tasks", 0, 49)
     print(f"\n{'=' * 60}")
     print(f"  RUN COMPLETE: {passed}/{total} passed ({rate}%)")
     print(f"  Pushed to dashboard.")
@@ -76,7 +76,7 @@ def check_completion(line, r):
 
 def push_to_redis(r, task):
     today = datetime.now(timezone.utc).date().isoformat()
-    daily_key = f"metrics:daily:{today}"
+    daily_key = f"atlas:metrics:daily:{today}"
 
     r.hincrby(daily_key, "tasks_total", 1)
     if task["result"] == "PASS":
@@ -99,8 +99,8 @@ def push_to_redis(r, task):
         "progress": f"{task['idx']}/{task['total']}",
         "rate_tasks_hr": task["rate"],
     })
-    r.lpush("metrics:recent_tasks", entry)
-    r.ltrim("metrics:recent_tasks", 0, 49)
+    r.lpush("atlas:metrics:recent_tasks", entry)
+    r.ltrim("atlas:metrics:recent_tasks", 0, 49)
 
     status = "PASS" if task["result"] == "PASS" else "FAIL"
     print(f"  -> Redis: [{task['idx']}/{task['total']}] "
