@@ -13,10 +13,12 @@ from fastapi import FastAPI, Request, Response, HTTPException, Header
 from fastapi.responses import StreamingResponse, JSONResponse
 from contextlib import asynccontextmanager
 from typing import Optional, Tuple
+import uuid
 
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama-service:8000")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 API_PORTAL_URL = os.getenv("API_PORTAL_URL", "http://api-portal:3000")
+RAG_API_URL = os.getenv("RAG_API_URL", "http://rag-api:8001")
 
 # API key validation cache
 _key_cache = {}
@@ -173,6 +175,90 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
         print(f"Failed to log metrics: {e}")
 
 
+# Atlas V3 model variants
+ATLAS_V3_MODELS = [
+    {"id": "atlas-v3", "object": "model", "created": 1700000000, "owned_by": "atlas"},
+    {"id": "atlas-v3-fast", "object": "model", "created": 1700000000, "owned_by": "atlas"},
+    {"id": "atlas-v3-thorough", "object": "model", "created": 1700000000, "owned_by": "atlas"},
+]
+
+
+async def handle_v3_request(body, model, start_time, rate_headers):
+    """Route atlas-v3 requests to RAG API /v3/run, return OpenAI format."""
+    messages = body.get("messages", [])
+    prompt = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            c = msg.get("content", "")
+            if isinstance(c, list):
+                prompt = " ".join(
+                    p.get("text", "") for p in c if p.get("type") == "text"
+                )
+            else:
+                prompt = str(c)
+            break
+    if not prompt:
+        raise HTTPException(status_code=400, detail="No user message found")
+    mode = "thorough" if model.endswith("-thorough") else "fast"
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as rc:
+            resp = await rc.post(
+                f"{RAG_API_URL}/v3/run",
+                json={"prompt": prompt, "mode": mode},
+            )
+            duration_ms = int((time.time() - start_time) * 1000)
+            if resp.status_code != 200:
+                log_metrics("v3_completion", model, 0, False, duration_ms)
+                return JSONResponse(
+                    status_code=resp.status_code,
+                    content={"error": {"message": f"RAG API error: {resp.text}",
+                             "type": "backend_error", "code": "rag_api_error"}},
+                    headers=rate_headers,
+                )
+            rag_result = resp.json()
+    except httpx.ConnectError:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log_metrics("v3_completion", model, 0, False, duration_ms)
+        return JSONResponse(
+            status_code=502,
+            content={"error": {"message": "RAG API unavailable",
+                     "type": "backend_error", "code": "connect_error"}},
+            headers=rate_headers,
+        )
+    except httpx.HTTPError as exc:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log_metrics("v3_completion", model, 0, False, duration_ms)
+        return JSONResponse(
+            status_code=502,
+            content={"error": {"message": f"RAG API error: {type(exc).__name__}",
+                     "type": "backend_error", "code": "proxy_error"}},
+            headers=rate_headers,
+        )
+    answer = rag_result.get("answer", rag_result.get("result", ""))
+    v3_meta = {"mode": mode, "rag_model": model}
+    for k in ("sources", "chunks", "confidence", "retrieval_time_ms",
+              "generation_time_ms"):
+        if k in rag_result:
+            v3_meta[k] = rag_result[k]
+    pt, ct = len(prompt.split()), len(answer.split())
+    openai_resp = {
+        "id": f"chatcmpl-v3-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": answer},
+            "finish_reason": "stop",
+        }],
+        "usage": {"prompt_tokens": pt, "completion_tokens": ct,
+                  "total_tokens": pt + ct},
+        "v3_metadata": v3_meta,
+    }
+    log_metrics("v3_completion", model, pt + ct, True, duration_ms)
+    return JSONResponse(content=openai_resp, headers=rate_headers)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"LLM Proxy starting - forwarding to {LLAMA_URL}")
@@ -214,8 +300,15 @@ async def list_models(authorization: str = Header(None)):
     rate_headers = get_rate_limit_headers(rate_limit, remaining, reset)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(f"{LLAMA_URL}/v1/models")
-        return Response(content=resp.content, media_type="application/json", headers=rate_headers)
+        try:
+            resp = await client.get(f"{LLAMA_URL}/v1/models")
+            backend_data = resp.json()
+        except Exception:
+            backend_data = {"object": "list", "data": []}
+
+        # Append atlas-v3 model variants
+        backend_data.setdefault("data", []).extend(ATLAS_V3_MODELS)
+        return JSONResponse(content=backend_data, headers=rate_headers)
 
 
 @app.post("/v1/chat/completions")
@@ -260,6 +353,11 @@ async def chat_completions(request: Request, authorization: str = Header(None)):
         raise HTTPException(status_code=400, detail="messages must be an array")
 
     model = body.get("model", "unknown")
+
+    # Intercept atlas-v3 model requests -- route to RAG API
+    if model.startswith("atlas-v3"):
+        return await handle_v3_request(body, model, start, rate_headers)
+
     stream = body.get("stream", False)
 
     if stream:
