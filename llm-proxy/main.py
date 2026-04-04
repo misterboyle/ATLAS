@@ -146,17 +146,16 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
     try:
         today = datetime.now(timezone.utc).date().isoformat()
 
-        # Increment daily counters
-        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total", 1)
-        redis_client.hincrby(f"atlas:metrics:daily:{today}", "requests_total", 1)  # Track requests
+        # Increment daily counters (field names must match dashboard template)
+        daily_key = f"atlas:metrics:daily:{today}"
+        redis_client.hincrby(daily_key, "tasks_total", 1)
         if success:
-            redis_client.hincrby(f"atlas:metrics:daily:{today}", "passed", 1)
+            redis_client.hincrby(daily_key, "tasks_success", 1)
         else:
-            redis_client.hincrby(f"atlas:metrics:daily:{today}", "failed", 1)
-        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_tokens", tokens)
-        redis_client.hincrby(f"atlas:metrics:daily:{today}", "tokens_total", tokens)  # Alternative key
-        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_duration_ms", duration_ms)
-        redis_client.hincrby(f"atlas:metrics:daily:{today}", "total_attempts", 1)
+            redis_client.hincrby(daily_key, "tasks_failed", 1)
+        redis_client.hincrby(daily_key, "total_tokens", tokens)
+        redis_client.hincrby(daily_key, "total_duration_ms", duration_ms)
+        redis_client.hincrby(daily_key, "total_attempts", 1)
 
         # Add to recent tasks
         task_record = json.dumps({
