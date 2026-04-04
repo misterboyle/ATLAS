@@ -162,7 +162,7 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
             redis_client.hincrby(daily_key, "tasks_failed", 1)
         redis_client.hincrby(daily_key, "total_tokens", tokens)
         redis_client.hincrby(daily_key, "total_duration_ms", duration_ms)
-        redis_client.hincrby(daily_key, "total_attempts", attempts) cb6dfa5
+        redis_client.hincrby(daily_key, "total_attempts", attempts)
 
         # Add to recent tasks
         task_record = json.dumps({
