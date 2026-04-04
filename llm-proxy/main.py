@@ -188,6 +188,91 @@ ATLAS_V3_MODELS = [
 ]
 
 
+def _extract_test_output(rag_result: dict) -> str:
+    """Extract test output from rag-api result for failure reporting."""
+    parts = []
+    telemetry = rag_result.get("telemetry", {})
+    for key in ("pr_cot_error", "refinement_error", "derivation_error",
+                "plansearch_error", "fallback_error", "probe_error"):
+        if key in telemetry:
+            parts.append(f"{key}: {telemetry[key]}")
+    if rag_result.get("error"):
+        parts.append(str(rag_result["error"]))
+    if not parts:
+        phase = rag_result.get("phase_solved", "none")
+        n = rag_result.get("candidates_generated", 0)
+        parts.append(f"All {n} candidates failed sandbox tests (phase_solved={phase})")
+    return "; ".join(parts)
+
+
+def _determine_retry_hint(failure_meta: dict, mode: str, data: dict) -> str:
+    """Determine retry hint based on failure context.
+
+    Returns one of:
+      - 'escalate_mode': try thorough mode (more compute)
+      - 'add_context': prompt is ambiguous, user should clarify
+      - 'retry': transient error, safe to retry as-is
+    """
+    error_type = failure_meta.get("error_type", "")
+    phase = failure_meta.get("phase_reached", "")
+    # Transient errors -> retry
+    if error_type in ("infrastructure", "timeout"):
+        return "retry"
+    # Fast mode and all candidates failed -> escalate to thorough
+    if mode == "fast" and error_type == "all_candidates_failed":
+        return "escalate_mode"
+    # No candidates generated -> likely ambiguous prompt
+    if failure_meta.get("candidates_tried", 0) == 0:
+        return "add_context"
+    # Phase 1 only reached, not yet thorough -> escalate
+    if phase in ("phase1", "none") and mode != "thorough":
+        return "escalate_mode"
+    # Already thorough and still failed -> add context
+    if mode == "thorough":
+        return "add_context"
+    return "retry"
+
+
+def _parse_v3_failure(resp_text: str, mode: str) -> dict:
+    """Parse structured failure metadata from rag-api error response."""
+    meta = {
+        "phase_reached": "unknown",
+        "error_type": "unknown",
+        "test_output": "",
+        "candidates_tried": 0,
+        "retry_hint": "retry",
+    }
+    try:
+        data = json.loads(resp_text)
+    except (json.JSONDecodeError, TypeError):
+        meta["error_type"] = "infrastructure"
+        meta["test_output"] = str(resp_text)[:500]
+        return meta
+    meta["phase_reached"] = data.get("phase_solved",
+                                     data.get("phase_reached", "unknown"))
+    meta["candidates_tried"] = data.get("candidates_generated",
+                                        data.get("candidates_tried", 0))
+    telemetry = data.get("telemetry", {})
+    test_output_parts = []
+    for key in ("pr_cot_error", "refinement_error", "derivation_error",
+                "plansearch_error", "fallback_error", "probe_error"):
+        if key in telemetry:
+            test_output_parts.append(f"{key}: {telemetry[key]}")
+    if data.get("error"):
+        test_output_parts.append(str(data["error"]))
+    meta["test_output"] = "; ".join(test_output_parts)[:1000]
+    if telemetry.get("timeout"):
+        meta["error_type"] = "timeout"
+    elif data.get("error"):
+        meta["error_type"] = "pipeline_error"
+    elif meta["phase_reached"] == "none":
+        meta["error_type"] = "all_candidates_failed"
+    else:
+        meta["error_type"] = "unknown"
+    meta["retry_hint"] = _determine_retry_hint(meta, mode, data)
+    return meta
+
+
 async def handle_v3_request(body, model, start_time, rate_headers):
     """Route atlas-v3 requests to RAG API /v3/run, return OpenAI format."""
     messages = body.get("messages", [])
@@ -220,10 +305,12 @@ async def handle_v3_request(body, model, start_time, rate_headers):
             duration_ms = int((time.time() - start_time) * 1000)
             if resp.status_code != 200:
                 log_metrics("v3_completion", model, 0, False, duration_ms)
+                failure_meta = _parse_v3_failure(resp.text, mode)
                 return JSONResponse(
                     status_code=resp.status_code,
-                    content={"error": {"message": f"RAG API error: {resp.text}",
-                             "type": "backend_error", "code": "rag_api_error"}},
+                    content={"error": {"message": f"RAG API error: {resp.text[:500]}",
+                             "type": "backend_error", "code": "rag_api_error"},
+                             "v3_failure_metadata": failure_meta},
                     headers=rate_headers,
                 )
             rag_result = resp.json()
@@ -233,7 +320,13 @@ async def handle_v3_request(body, model, start_time, rate_headers):
         return JSONResponse(
             status_code=502,
             content={"error": {"message": "RAG API unavailable",
-                     "type": "backend_error", "code": "connect_error"}},
+                     "type": "backend_error", "code": "connect_error"},
+                     "v3_failure_metadata": {
+                         "phase_reached": "pre_request",
+                         "error_type": "infrastructure",
+                         "test_output": "",
+                         "candidates_tried": 0,
+                         "retry_hint": "retry"}},
             headers=rate_headers,
         )
     except httpx.HTTPError as exc:
@@ -242,7 +335,13 @@ async def handle_v3_request(body, model, start_time, rate_headers):
         return JSONResponse(
             status_code=502,
             content={"error": {"message": f"RAG API error: {type(exc).__name__}",
-                     "type": "backend_error", "code": "proxy_error"}},
+                     "type": "backend_error", "code": "proxy_error"},
+                     "v3_failure_metadata": {
+                         "phase_reached": "pre_request",
+                         "error_type": "infrastructure",
+                         "test_output": str(exc)[:500],
+                         "candidates_tried": 0,
+                         "retry_hint": "retry"}},
             headers=rate_headers,
         )
     answer = rag_result.get("code", rag_result.get("answer", rag_result.get("result", "")))
@@ -251,6 +350,23 @@ async def handle_v3_request(body, model, start_time, rate_headers):
               "total_tokens", "total_time_ms", "telemetry"):
         if k in rag_result:
             v3_meta[k] = rag_result[k]
+    # Detect partial success: code was generated but all tests failed
+    is_passed = rag_result.get("passed", False)
+    if not is_passed and answer:
+        v3_meta["status"] = "partial"
+        v3_meta["v3_failure_metadata"] = {
+            "phase_reached": rag_result.get("phase_solved", "none"),
+            "error_type": "tests_failed",
+            "test_output": _extract_test_output(rag_result)[:1000],
+            "candidates_tried": rag_result.get("candidates_generated", 0),
+            "retry_hint": _determine_retry_hint(
+                {"error_type": "all_candidates_failed",
+                 "phase_reached": rag_result.get("phase_solved", "none"),
+                 "candidates_tried": rag_result.get("candidates_generated", 0)},
+                mode, rag_result),
+        }
+    elif is_passed:
+        v3_meta.setdefault("status", "passed")
     pt, ct = len(prompt.split()), len(answer.split())
     openai_resp = {
         "id": f"chatcmpl-v3-{uuid.uuid4().hex[:12]}",
@@ -266,7 +382,7 @@ async def handle_v3_request(body, model, start_time, rate_headers):
                   "total_tokens": pt + ct},
         "v3_metadata": v3_meta,
     }
-    log_metrics("v3_completion", model, pt + ct, True, duration_ms)
+    log_metrics("v3_completion", model, pt + ct, is_passed, duration_ms)
     return JSONResponse(content=openai_resp, headers=rate_headers)
 
 
