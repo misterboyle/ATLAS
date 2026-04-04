@@ -21,6 +21,7 @@ LLAMA_URL = os.getenv("LLAMA_URL", "http://llama-service:8000")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 API_PORTAL_URL = os.getenv("API_PORTAL_URL", "http://api-portal:3000")
 RAG_API_URL = os.getenv("RAG_API_URL", "http://rag-api:8001")
+ATLAS_V3_REFLECT_ON_FAILURE = os.getenv("ATLAS_V3_REFLECT_ON_FAILURE", "true").lower() in ("true", "1")
 
 # API key validation cache
 _key_cache = {}
@@ -144,7 +145,7 @@ def get_rate_limit_headers(limit: int, remaining: int, reset_seconds: int) -> di
     }
 
 
-def log_metrics(request_type: str, model: str, tokens: int, success: bool, duration_ms: int):
+def log_metrics(request_type: str, model: str, tokens: int, success: bool, duration_ms: int, attempts: int = 1, phase: str = ""):
     """Log request metrics to Redis."""
     if not redis_client:
         return
@@ -154,13 +155,14 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
         # Increment daily counters (field names must match dashboard template)
         daily_key = f"atlas:metrics:daily:{today}"
         redis_client.hincrby(daily_key, "tasks_total", 1)
+        redis_client.hincrby(daily_key, "requests_total", 1)  # Track requests
         if success:
             redis_client.hincrby(daily_key, "tasks_success", 1)
         else:
             redis_client.hincrby(daily_key, "tasks_failed", 1)
         redis_client.hincrby(daily_key, "total_tokens", tokens)
         redis_client.hincrby(daily_key, "total_duration_ms", duration_ms)
-        redis_client.hincrby(daily_key, "total_attempts", 1)
+        redis_client.hincrby(daily_key, "total_attempts", attempts) cb6dfa5
 
         # Add to recent tasks
         task_record = json.dumps({
@@ -168,9 +170,10 @@ def log_metrics(request_type: str, model: str, tokens: int, success: bool, durat
             "type": request_type,
             "model": model,
             "success": success,
-            "attempts": 1,
+            "attempts": attempts,
             "duration_ms": duration_ms,
             "tokens": tokens,
+            "phase": phase,
             "completed_at": datetime.now(timezone.utc).isoformat()
         })
         redis_client.lpush("atlas:metrics:recent_tasks", task_record)
@@ -186,6 +189,75 @@ ATLAS_V3_MODELS = [
     {"id": "atlas-v3-thorough", "object": "model", "created": 1700000000, "owned_by": "atlas"},
     {"id": "atlas-v3-auto", "object": "model", "created": 1700000000, "owned_by": "atlas"},
 ]
+
+
+def _build_reflection_prompt(rag_result: dict, user_prompt: str) -> str:
+    """Build a reflection prompt from V3 pipeline failure context."""
+    phase = rag_result.get("phase_solved", "unknown")
+    candidates = rag_result.get("candidates_generated", 0)
+
+    # Collect error details from telemetry
+    telemetry = rag_result.get("telemetry", {})
+    error_parts = []
+    for key in ("pr_cot_error", "refinement_error", "derivation_error",
+                "plansearch_error", "fallback_error", "probe_error"):
+        if key in telemetry:
+            error_parts.append(f"{key}: {telemetry[key]}")
+    error_msg = "; ".join(error_parts) if error_parts else "All candidates failed sandbox tests"
+
+    # Extract test output (truncated to 2000 chars)
+    test_output = rag_result.get("test_output", "")
+    if not test_output and isinstance(telemetry, dict):
+        test_output = str(telemetry.get("test_stderr", ""))
+    test_output = test_output[:2000]
+
+    # Best-attempt code (truncated)
+    code = rag_result.get("code", "")[:1500]
+
+    parts = [
+        "The V3 code generation pipeline failed to produce a passing solution.",
+        f"Phase reached: {phase}",
+        f"Candidates tried: {candidates}",
+        f"Error: {error_msg}",
+    ]
+    if test_output:
+        parts.append(f"Test output: {test_output}")
+    if code:
+        parts.append(f"\nBest attempt code:\n```python\n{code}\n```")
+    parts.append(
+        "\nPlease diagnose why this failed and suggest what information "
+        "or clarification would help solve this task."
+    )
+    return "\n".join(parts)
+
+
+async def _call_reflection_llm(reflection_prompt: str) -> Optional[str]:
+    """Make a lightweight LLM call to diagnose a V3 failure.
+
+    Uses max_tokens=500 and a 30s timeout to keep reflection fast.
+    Returns None on any error so the caller can fall back gracefully.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{LLAMA_URL}/v1/chat/completions",
+                json={
+                    "model": "reflection",
+                    "messages": [{"role": "user", "content": reflection_prompt}],
+                    "max_tokens": 500,
+                    "temperature": 0.3,
+                    "stream": False,
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "")
+    except Exception as e:
+        print(f"Reflection LLM call failed: {e}")
+    return None
 
 
 async def handle_v3_request(body, model, start_time, rate_headers):
@@ -251,6 +323,22 @@ async def handle_v3_request(body, model, start_time, rate_headers):
               "total_tokens", "total_time_ms", "telemetry"):
         if k in rag_result:
             v3_meta[k] = rag_result[k]
+    # --- V3 Failure Reflection ---
+    # When V3 pipeline ran but failed to produce passing code,
+    # make a second LLM call to diagnose the failure and return
+    # a helpful response instead of raw failed code.
+    v3_failed = (
+        rag_result.get("passed") is False
+        or v3_meta.get("phase_solved") in ("none", "error")
+        or v3_meta.get("status") == "failed"
+    )
+    if v3_failed and ATLAS_V3_REFLECT_ON_FAILURE:
+        reflection_prompt = _build_reflection_prompt(rag_result, prompt)
+        reflection_response = await _call_reflection_llm(reflection_prompt)
+        if reflection_response:
+            v3_meta["status"] = "reflected_failure"
+            v3_meta["original_code"] = rag_result.get("code", "")[:500]
+            answer = reflection_response
     pt, ct = len(prompt.split()), len(answer.split())
     openai_resp = {
         "id": f"chatcmpl-v3-{uuid.uuid4().hex[:12]}",
@@ -266,7 +354,9 @@ async def handle_v3_request(body, model, start_time, rate_headers):
                   "total_tokens": pt + ct},
         "v3_metadata": v3_meta,
     }
-    log_metrics("v3_completion", model, pt + ct, True, duration_ms)
+    v3_attempts = v3_meta.get("candidates_generated", 1) if isinstance(v3_meta, dict) else 1
+    v3_phase = v3_meta.get("phase_solved", "") if isinstance(v3_meta, dict) else ""
+    log_metrics("v3_completion", model, pt + ct, True, duration_ms, attempts=v3_attempts, phase=v3_phase)
     return JSONResponse(content=openai_resp, headers=rate_headers)
 
 
