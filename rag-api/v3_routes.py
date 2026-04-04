@@ -19,6 +19,11 @@ if str(_ATLAS_ROOT) not in sys.path:
 
 logger = logging.getLogger(__name__)
 
+try:
+    from benchmark.v3_dashboard_push import push_task as _dashboard_push
+except ImportError:
+    _dashboard_push = None
+
 router = APIRouter(prefix="/v3", tags=["v3-pipeline"])
 
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -105,7 +110,13 @@ def _run_v3_task(req: V3RunRequest) -> Dict[str, Any]:
         if not has_stdio and not has_functional:
             llm = LLMAdapter(runner)
             self_test_gen = SelfTestGen(
-                SelfTestGenConfig(enabled=True),
+                SelfTestGenConfig(
+                    enabled=True,
+                    num_test_cases=int(os.environ.get(
+                        "ATLAS_V3_SELF_TEST_NUM_CASES", "5")),
+                    majority_threshold=float(os.environ.get(
+                        "ATLAS_V3_SELF_TEST_MAJORITY_THRESHOLD", "0.6")),
+                ),
                 telemetry_dir=telemetry_dir,
             )
             st_result = self_test_gen.generate(
@@ -150,6 +161,13 @@ async def v3_run(request: V3RunRequest):
     except Exception as e:
         logger.exception("V3 pipeline error for task %s", request.task_id)
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Push result to dashboard (fail-safe)
+    if _dashboard_push is not None:
+        try:
+            _dashboard_push(result, 0, 0, 0)
+        except Exception:
+            pass
 
     status = "solved" if result.get("passed") else "failed"
 

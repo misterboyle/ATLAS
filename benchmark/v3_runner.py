@@ -101,8 +101,10 @@ MAX_TOKENS = 8192
 BASE_TEMPERATURE = 0.6  # Qwen3.5 recommended for coding with thinking
 DIVERSITY_TEMPERATURE = 0.8  # Slightly higher for candidate diversity
 MAX_TOKENS = int(os.environ.get("ATLAS_MAX_TOKENS", config._conf.get("ATLAS_CONTEXT_LENGTH", "16384")))
-BASE_TEMPERATURE = 0.0
-DIVERSITY_TEMPERATURE = 0.6
+BASE_TEMPERATURE = float(os.environ.get("ATLAS_V3_BASE_TEMPERATURE",
+    config._conf.get("ATLAS_V3_BASE_TEMPERATURE", "0.0")))
+DIVERSITY_TEMPERATURE = float(os.environ.get("ATLAS_V3_DIVERSITY_TEMPERATURE",
+    config._conf.get("ATLAS_V3_DIVERSITY_TEMPERATURE", "0.6")))
 
 
 # --- Atomic I/O (reused from v2_runner) ----------------------------------------
@@ -749,7 +751,13 @@ class V3Pipeline:
             telemetry_dir=telemetry_dir,
         )
         self.self_test_gen = SelfTestGen(
-            SelfTestGenConfig(enabled=self.enable_phase3),
+            SelfTestGenConfig(
+                enabled=self.enable_phase3,
+                num_test_cases=int(self._v3_conf.get("self_test_num_cases",
+                    config._conf.get("ATLAS_V3_SELF_TEST_NUM_CASES", "5"))),
+                majority_threshold=float(self._v3_conf.get("self_test_threshold",
+                    config._conf.get("ATLAS_V3_SELF_TEST_MAJORITY_THRESHOLD", "0.6"))),
+            ),
             telemetry_dir=telemetry_dir,
         )
 
