@@ -91,8 +91,10 @@ from benchmark.v3.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
 RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
 LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '32735')}")
 MAX_TOKENS = int(os.environ.get("ATLAS_MAX_TOKENS", config._conf.get("ATLAS_CONTEXT_LENGTH", "16384")))
-BASE_TEMPERATURE = 0.0
-DIVERSITY_TEMPERATURE = 0.6
+BASE_TEMPERATURE = float(os.environ.get("ATLAS_V3_BASE_TEMPERATURE",
+    config._conf.get("ATLAS_V3_BASE_TEMPERATURE", "0.0")))
+DIVERSITY_TEMPERATURE = float(os.environ.get("ATLAS_V3_DIVERSITY_TEMPERATURE",
+    config._conf.get("ATLAS_V3_DIVERSITY_TEMPERATURE", "0.6")))
 
 
 # --- Atomic I/O (reused from v2_runner) ----------------------------------------
@@ -610,7 +612,13 @@ class V3Pipeline:
             telemetry_dir=telemetry_dir,
         )
         self.self_test_gen = SelfTestGen(
-            SelfTestGenConfig(enabled=self.enable_phase3),
+            SelfTestGenConfig(
+                enabled=self.enable_phase3,
+                num_test_cases=int(self._v3_conf.get("self_test_num_cases",
+                    config._conf.get("ATLAS_V3_SELF_TEST_NUM_CASES", "5"))),
+                majority_threshold=float(self._v3_conf.get("self_test_threshold",
+                    config._conf.get("ATLAS_V3_SELF_TEST_MAJORITY_THRESHOLD", "0.6"))),
+            ),
             telemetry_dir=telemetry_dir,
         )
 

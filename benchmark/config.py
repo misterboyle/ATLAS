@@ -145,7 +145,7 @@ class BenchmarkConfig:
     @property
     def default_timeout_seconds(self) -> int:
         """Default timeout for code execution."""
-        return 30
+        return int(self._conf.get("ATLAS_SANDBOX_TIMEOUT", "30"))
 
     @property
     def default_memory_limit_mb(self) -> int:
