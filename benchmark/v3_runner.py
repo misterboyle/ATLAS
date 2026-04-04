@@ -90,7 +90,7 @@ from benchmark.v3.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
 
 RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:31144")
 LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('ATLAS_LLAMA_NODEPORT', '32735')}")
-MAX_TOKENS = 16384
+MAX_TOKENS = int(os.environ.get("ATLAS_MAX_TOKENS", config._conf.get("ATLAS_CONTEXT_LENGTH", "16384")))
 BASE_TEMPERATURE = 0.0
 DIVERSITY_TEMPERATURE = 0.6
 

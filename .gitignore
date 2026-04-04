@@ -148,3 +148,4 @@ v2_5_1/
 
 # ----- Python Virtual Environment -----
 .venv/
+.venv
