@@ -140,7 +140,7 @@ class BenchmarkConfig:
     @property
     def model_name(self) -> str:
         """Main model filename."""
-        return self._conf.get("ATLAS_MAIN_MODEL", "Qwen3-14B-Q4_K_M.gguf")
+        return self._conf.get("ATLAS_MAIN_MODEL", "Qwen3.5-9B-Opus-Distilled-v2-Q8_0.gguf")
 
     @property
     def default_timeout_seconds(self) -> int:
