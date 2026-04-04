@@ -401,31 +401,12 @@ async def delete_project(
 
 
 def log_request_metrics(request_type: str, success: bool, tokens: int = 0, model: str = ""):
-    """Log request metrics to Redis for dashboard."""
-    if not redis_client:
-        return
-    try:
-        from datetime import date
-        today = date.today().isoformat()
+    """No-op: llm-proxy owns API-path metrics (atlas:metrics:daily:*).
 
-        # Increment daily counters
-        redis_client.hincrby(f"metrics:daily:{today}", "tasks_total", 1)
-        if success:
-            redis_client.hincrby(f"metrics:daily:{today}", "tasks_success", 1)
-        redis_client.hincrby(f"metrics:daily:{today}", "tokens_total", tokens)
-
-        # Add to recent tasks list
-        task_record = json.dumps({
-            "type": request_type,
-            "model": model,
-            "tokens": tokens,
-            "success": success,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-        redis_client.lpush("metrics:recent_tasks", task_record)
-        redis_client.ltrim("metrics:recent_tasks", 0, 99)  # Keep last 100
-    except Exception as e:
-        logger.warning(f"Failed to log metrics: {e}")
+    rag-api is a backend called by llm-proxy and task-worker.
+    Logging here would double-count. See data-flow KB section.
+    """
+    pass
 
 
 @app.post("/v1/chat/completions")
