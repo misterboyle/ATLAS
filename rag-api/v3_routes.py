@@ -26,6 +26,12 @@ except ImportError:
 
 router = APIRouter(prefix="/v3", tags=["v3-pipeline"])
 
+try:
+    from v3_component_routes import router as _comp_router
+    router.include_router(_comp_router)
+except ImportError:
+    pass
+
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
