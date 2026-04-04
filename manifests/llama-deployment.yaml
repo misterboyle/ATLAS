@@ -33,7 +33,7 @@ spec:
         - containerPort: 8000
         env:
         - name: MODEL_PATH
-          value: "/models/Qwen3-14B-Q4_K_M.gguf"
+          value: "/models/Qwen3.5-9B-Opus-Distilled-v2-Q8_0.gguf"
         - name: CONTEXT_LENGTH
           value: "16384"
         - name: GPU_LAYERS
@@ -41,7 +41,7 @@ spec:
         - name: PARALLEL_SLOTS
           value: "1"
         - name: DRAFT_MODEL
-          value: "/models/Qwen3-0.6B-Q8_0.gguf"
+          value: "/models/Qwen3.5-0.8B-Q8_0.gguf"
         # PCIe transfer optimization: enable pinned (page-locked) host memory
         - name: GGML_CUDA_NO_PINNED
           value: "0"
