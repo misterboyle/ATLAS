@@ -283,6 +283,14 @@ async def handle_v3_request(body, model, start_time, rate_headers):
     if not prompt:
         raise HTTPException(status_code=400, detail="No user message found")
     mode = "thorough" if model.endswith("-thorough") else "fast"
+    if model.endswith("-thorough"):
+        mode = "thorough"
+    elif model.endswith("-auto") or model == "atlas-v3":
+        mode = "auto"
+    else:
+        mode = "fast"
+    _default_thorough = int(os.environ.get("ATLAS_V3_TASK_TIMEOUT_S", "1800"))
+    timeout_s = _default_thorough if mode in ("thorough", "auto") else 300
     try:
         async with httpx.AsyncClient(timeout=600.0) as rc:
             resp = await rc.post(
