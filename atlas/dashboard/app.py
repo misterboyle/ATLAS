@@ -17,14 +17,18 @@ templates = Jinja2Templates(directory="templates")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
+# llm-proxy sorted-set priority queue constants
+QUEUE_KEY = "llm_proxy:task_queue"
+BAND_WIDTH = 10**13
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     """Main dashboard page."""
-    # Get queue stats
+    # Get queue stats from sorted-set priority queue
     queue_stats = {
-        "p0": redis_client.llen("tasks:p0"),
-        "p1": redis_client.llen("tasks:p1"),
-        "p2": redis_client.llen("tasks:p2"),
+        "p0": redis_client.zcount(QUEUE_KEY, 0, BAND_WIDTH - 1),
+        "p1": redis_client.zcount(QUEUE_KEY, BAND_WIDTH, 2 * BAND_WIDTH - 1),
+        "p2": redis_client.zcount(QUEUE_KEY, 2 * BAND_WIDTH, 3 * BAND_WIDTH - 1),
     }
 
     # Get today's metrics (use UTC to match task-worker)
@@ -71,9 +75,9 @@ async def api_stats():
 
     return {
         "queue": {
-            "p0": redis_client.llen("tasks:p0"),
-            "p1": redis_client.llen("tasks:p1"),
-            "p2": redis_client.llen("tasks:p2"),
+            "p0": redis_client.zcount(QUEUE_KEY, 0, BAND_WIDTH - 1),
+            "p1": redis_client.zcount(QUEUE_KEY, BAND_WIDTH, 2 * BAND_WIDTH - 1),
+            "p2": redis_client.zcount(QUEUE_KEY, 2 * BAND_WIDTH, 3 * BAND_WIDTH - 1),
         },
         "daily": redis_client.hgetall(f"atlas:metrics:daily:{today}"),
         "recent": [
