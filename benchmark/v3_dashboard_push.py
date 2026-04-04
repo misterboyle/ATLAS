@@ -46,17 +46,17 @@ def push_task(task_result, done, total, rate):
         tokens = task_result.get("total_tokens", 0)
         duration_ms = int(task_result.get("total_time_ms", 0))
 
+        attempts = task_result.get("candidates_generated", 1)
+
         pipe = r.pipeline()
-        pipe.hincrby(daily_key, "total", 1)
-        pipe.hincrby(daily_key, "requests_total", 1)
-        pipe.hincrby(daily_key, "total_attempts", 1)
+        pipe.hincrby(daily_key, "tasks_total", 1)
+        pipe.hincrby(daily_key, "total_attempts", attempts)
         pipe.hincrby(daily_key, "total_tokens", tokens)
-        pipe.hincrby(daily_key, "tokens_total", tokens)
         pipe.hincrby(daily_key, "total_duration_ms", duration_ms)
         if task_result.get("passed"):
-            pipe.hincrby(daily_key, "passed", 1)
+            pipe.hincrby(daily_key, "tasks_success", 1)
         else:
-            pipe.hincrby(daily_key, "failed", 1)
+            pipe.hincrby(daily_key, "tasks_failed", 1)
 
         entry = json.dumps({
             "task_id": task_result.get("task_id", "unknown"),
