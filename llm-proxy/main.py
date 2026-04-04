@@ -29,7 +29,7 @@ _key_cache_ttl = 60  # seconds
 
 # Redis client
 try:
-    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=5, socket_connect_timeout=5)
     redis_client.ping()
 except Exception:
     redis_client = None
@@ -461,6 +461,13 @@ async def chat_completions(request: Request, authorization: str = Header(None)):
         return await handle_v3_request(body, model, start, rate_headers)
 
     stream = body.get("stream", False)
+
+    # Cap max_tokens to prevent runaway generations blocking the single slot
+    MAX_PROXY_TOKENS = int(os.environ.get("MAX_PROXY_TOKENS", "8192"))
+    if body.get("max_tokens") and body["max_tokens"] > MAX_PROXY_TOKENS:
+        body["max_tokens"] = MAX_PROXY_TOKENS
+    elif not body.get("max_tokens"):
+        body["max_tokens"] = MAX_PROXY_TOKENS
 
     if stream:
         # Ensure llama-server reports token usage in final SSE chunk
