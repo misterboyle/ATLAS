@@ -15,6 +15,8 @@ from contextlib import asynccontextmanager
 from typing import Optional, Tuple
 import uuid
 
+from task_queue import TaskQueue
+
 LLAMA_URL = os.getenv("LLAMA_URL", "http://llama-service:8000")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 API_PORTAL_URL = os.getenv("API_PORTAL_URL", "http://api-portal:3000")
@@ -31,6 +33,9 @@ try:
 except Exception:
     redis_client = None
     print("Warning: Redis not available, metrics will not be logged")
+
+# Task queue for async V3 request status tracking
+task_queue = TaskQueue(redis_client=redis_client) if redis_client else None
 
 
 async def validate_api_key(api_key: str) -> Optional[dict]:
@@ -422,6 +427,18 @@ async def chat_completions(request: Request, authorization: str = Header(None)):
                 duration_ms = int((time.time() - start) * 1000)
                 log_metrics("chat_completion", model, 0, False, duration_ms)
                 raise
+
+
+@app.get("/v3/task/{task_id}")
+async def get_v3_task_status(task_id: str, authorization: str = Header(None)):
+    """Poll task status and result for async V3 queue requests."""
+    auth_data = await require_api_key(authorization)
+    if not task_queue:
+        raise HTTPException(status_code=503, detail="Task queue unavailable")
+    status = task_queue.get_task_status(task_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return JSONResponse(content={"task_id": task_id, **status})
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
