@@ -174,3 +174,4 @@ geometric-lens/geometric_lens/gate_embeddings.json
 geometric-lens/geometric_lens/gate_report.json
 # ----- Python Virtual Environment -----
 .venv/
+.venv

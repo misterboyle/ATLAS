@@ -100,6 +100,9 @@ LLAMA_URL = os.environ.get("LLAMA_URL", f"http://localhost:{config._conf.get('AT
 MAX_TOKENS = 8192
 BASE_TEMPERATURE = 0.6  # Qwen3.5 recommended for coding with thinking
 DIVERSITY_TEMPERATURE = 0.8  # Slightly higher for candidate diversity
+MAX_TOKENS = int(os.environ.get("ATLAS_MAX_TOKENS", config._conf.get("ATLAS_CONTEXT_LENGTH", "16384")))
+BASE_TEMPERATURE = 0.0
+DIVERSITY_TEMPERATURE = 0.6
 
 
 # --- Atomic I/O (reused from v2_runner) ----------------------------------------

@@ -37,7 +37,10 @@ class V3RunRequest(BaseModel):
     test_code: Optional[str] = None
     test_inputs: Optional[List[str]] = None
     test_outputs: Optional[List[str]] = None
-    timeout_seconds: int = Field(default=300, ge=1, le=3600)
+    timeout_seconds: int = Field(
+        default=int(os.environ.get("ATLAS_V3_TASK_TIMEOUT_S", "300")),
+        ge=1, le=3600,
+    )
 
 
 class V3RunResponse(BaseModel):
@@ -58,7 +61,7 @@ def _run_v3_task(req: V3RunRequest) -> Dict[str, Any]:
     from benchmark.v3_runner import V3Pipeline, LLMAdapter
     from benchmark.v3.self_test_gen import SelfTestGen, SelfTestGenConfig
 
-    v3_llama_url = os.environ.get("V3_LLAMA_URL", "http://localhost:32735")
+    v3_llama_url = os.environ.get("V3_LLAMA_URL", os.environ.get("LLAMA_URL", "http://host.docker.internal:8090"))
     os.environ.setdefault("LLAMA_URL", v3_llama_url)
 
     has_stdio = bool(req.test_inputs and req.test_outputs)
