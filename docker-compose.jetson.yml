@@ -1,0 +1,217 @@
+# ATLAS Docker Compose -- Jetson Orin AGX (JP5.1.6, L4T R35.6)
+# llama-server runs NATIVELY on Jetson (not containerized)
+# All other services run in Docker with nvidia runtime (default)
+#
+# Usage:
+#   cd atlas-src
+#   docker compose -f docker-compose.jetson.yml build
+#   docker compose -f docker-compose.jetson.yml up -d
+#
+# Prerequisites:
+#   - Docker with nvidia default runtime configured
+#   - llama-server running natively on port 8000
+#   - Models at /mnt/nvme/models/
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: atlas-redis
+    ports:
+      - "6379:6379"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "2gb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  llm-proxy:
+    build:
+      context: ./llm-proxy
+      dockerfile: Dockerfile
+    container_name: atlas-llm-proxy
+    ports:
+      - "8080:8000"
+    environment:
+      - LLAMA_URL=http://host.docker.internal:8000
+      - API_PORTAL_URL=http://api-portal:3000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DEFAULT_RATE_LIMIT=1000
+      - LOG_LEVEL=INFO
+      - LOG_REQUESTS=true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  rag-api:
+    build:
+      context: ./rag-api
+      dockerfile: Dockerfile.jetson
+    container_name: atlas-rag-api
+    ports:
+      - "8001:8001"
+    environment:
+      - LLAMA_URL=http://host.docker.internal:8000
+      - LLAMA_EMBED_URL=http://host.docker.internal:8000
+      - API_PORTAL_URL=http://api-portal:3000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CONTEXT_BUDGET=8000
+      - TOP_K=20
+      - MAX_FILES=10000
+      - LOG_LEVEL=INFO
+      - ENABLE_PROVENANCE=true
+      - RETRIEVAL_MODE=pageindex
+      - ROUTING_ENABLED=true
+      - GEOMETRIC_LENS_ENABLED=false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - projects-data:/data/projects
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  api-portal:
+    build:
+      context: ./api-portal
+      dockerfile: Dockerfile
+    container_name: atlas-api-portal
+    ports:
+      - "3000:3000"
+    environment:
+      - JWT_SECRET=${ATLAS_JWT_SECRET:-atlas-jetson-dev-secret}
+      - JWT_EXPIRY_HOURS=24
+      - DEFAULT_RATE_LIMIT=1000
+      - LLAMA_URL=http://host.docker.internal:8000
+      - LOG_LEVEL=INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - api-portal-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  dashboard:
+    build:
+      context: ./atlas/dashboard
+      dockerfile: Dockerfile
+    container_name: atlas-dashboard
+    ports:
+      - "3001:3001"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3001/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  sandbox:
+    build:
+      context: ./atlas/sandbox
+      dockerfile: Dockerfile
+    container_name: atlas-sandbox
+    ports:
+      - "8020:8020"
+    environment:
+      - MAX_EXECUTION_TIME=60
+      - MAX_MEMORY_MB=512
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  task-worker:
+    build:
+      context: ./atlas/task-worker
+      dockerfile: Dockerfile
+    container_name: atlas-task-worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RAG_API_URL=http://rag-api:8001
+      - LLAMA_URL=http://host.docker.internal:8000
+      - LLAMA_MODEL=Qwen3-14B-Q4_K_M.gguf
+      - SANDBOX_URL=http://sandbox:8020
+      - TASK_TIMEOUT=300
+      - RALPH_MAX_RETRIES=5
+      - RALPH_BASE_TEMP=0.7
+      - RALPH_TEMP_INCREMENT=0.1
+      - RALPH_MAX_TEMP=1.2
+      - LOG_LEVEL=INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rag-api:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/nvme/atlas-data/redis
+  projects-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/nvme/atlas-data/projects
+  api-portal-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/nvme/atlas-data/api-portal
