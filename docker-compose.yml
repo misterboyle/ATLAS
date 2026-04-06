@@ -1,0 +1,157 @@
+# docker-compose.yml -- ATLAS V3.0.1 (Windows 11 + WSL2 fork)
+#
+# Adapted from upstream (github.com/itigges22/ATLAS) for AMD GPU:
+# - llama-server runs natively on Windows (ROCm), not as a CUDA container
+# - llama-lifecycle container manages start/stop via signal-file bridge
+# - extra_hosts maps 'llama-server' hostname to Windows host (host-gateway)
+# - Port 8090 instead of 8080 (Hyper-V reserves 7989-8088)
+#
+# Usage: ./start-atlas.sh (ensures llama-bridge is running, then docker compose up)
+
+# DNS override: makes 'llama-server' resolve to host-gateway IP inside containers.
+# On Docker Desktop (Windows/Mac), host-gateway = Windows host IP.
+# On native Docker Engine (Linux/Jetson), host-gateway = host network gateway.
+x-host-gateway: &host-gateway
+  - "host.docker.internal:host-gateway"
+  - "llama-server:host-gateway"
+
+services:
+  # --- llama-lifecycle (replaces upstream CUDA llama-server container) ---
+  # Manages native Windows llama-server.exe via signal-file bridge.
+  # Writes start/stop commands to /signals/llama-command; llama-bridge.py
+  # (systemd service on WSL2) picks them up and controls llama-server.exe
+  # via PowerShell interop.
+  llama-lifecycle:
+    image: alpine:3.19
+    entrypoint: ["/bin/sh", "/scripts/llama-lifecycle.sh"]
+    extra_hosts: *host-gateway
+    volumes:
+      - ../signals:/signals
+      - ../src/llama-lifecycle.sh:/scripts/llama-lifecycle.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://llama-server:8090/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+    networks:
+      - atlas
+
+  # --- Geometric Lens (C(x)/G(x) scoring) ---
+  geometric-lens:
+    build:
+      context: ./geometric-lens
+    extra_hosts: *host-gateway
+    environment:
+      - LLAMA_URL=http://llama-server:8090
+      - LLAMA_EMBED_URL=http://llama-server:8090
+      - GEOMETRIC_LENS_ENABLED=true
+      - PROJECT_DATA_DIR=/data/projects
+    volumes:
+      - lens-data:/data/projects
+      - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
+    ports:
+      - "${ATLAS_LENS_PORT:-8099}:8099"
+    depends_on:
+      llama-lifecycle:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - atlas
+
+  # --- V3 Pipeline Service ---
+  v3-service:
+    build:
+      context: .
+      dockerfile: v3-service/Dockerfile
+    extra_hosts: *host-gateway
+    environment:
+      - ATLAS_INFERENCE_URL=http://llama-server:8090
+      - ATLAS_LENS_URL=http://geometric-lens:8099
+      - ATLAS_SANDBOX_URL=http://sandbox:8020
+      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+    ports:
+      - "${ATLAS_V3_PORT:-8070}:8070"
+    depends_on:
+      llama-lifecycle:
+        condition: service_healthy
+      geometric-lens:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8070/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - atlas
+
+  # --- Sandbox (isolated code execution) ---
+  sandbox:
+    build:
+      context: ./sandbox
+    environment:
+      - TMPDIR=/tmp/sandbox
+      - HOME=/tmp/sandbox
+      - GOPATH=/tmp/sandbox/go
+      - GOMODCACHE=/tmp/sandbox/go/pkg/mod
+      - GOCACHE=/tmp/sandbox/go/cache
+      - CARGO_HOME=/tmp/sandbox/cargo
+      - npm_config_cache=/tmp/sandbox/npm
+    tmpfs:
+      - /tmp/sandbox:size=512M
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${ATLAS_SANDBOX_PORT:-30820}:8020"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8020/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - atlas
+
+  # --- ATLAS Proxy v2 (agent loop + grammar + Aider format) ---
+  atlas-proxy:
+    build:
+      context: ./atlas-proxy
+    extra_hosts: *host-gateway
+    environment:
+      - ATLAS_PROXY_PORT=8090
+      - ATLAS_INFERENCE_URL=http://llama-server:8090
+      - ATLAS_LLAMA_URL=http://llama-server:8090
+      - ATLAS_LENS_URL=http://geometric-lens:8099
+      - ATLAS_SANDBOX_URL=http://sandbox:8020
+      - ATLAS_V3_URL=http://v3-service:8070
+      - ATLAS_AGENT_LOOP=1
+      - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
+    ports:
+      - "${ATLAS_PROXY_PORT:-8090}:8090"
+    depends_on:
+      llama-lifecycle:
+        condition: service_healthy
+      geometric-lens:
+        condition: service_healthy
+      v3-service:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - atlas
+
+volumes:
+  lens-data:
+
+networks:
+  atlas:
+    driver: bridge
