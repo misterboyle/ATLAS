@@ -59,6 +59,88 @@ var v3ServiceURL = envOr("ATLAS_V3_URL", "http://localhost:8070")
 // to prevent double-request triggering another full pipeline run
 var lastWasV3 sync.Map // key: remote IP, value: time.Time
 
+// ---------------------------------------------------------------------------
+// Model swap -- alias resolution + signal-file bridge
+// ---------------------------------------------------------------------------
+
+// ModelEntry maps a human-friendly alias to GGUF filenames.
+type ModelEntry struct {
+	GGUF  string
+	Draft string
+}
+
+// modelRegistry maps client-facing model aliases to GGUF filenames.
+// Clients send model: "qwen3.5-atlas" in OpenAI API requests;
+// the proxy resolves to the GGUF and swaps llama-server if needed.
+var modelRegistry = map[string]ModelEntry{
+	"qwen3.5-atlas": {GGUF: "Qwen3.5-9B-Opus-Distilled-v2-Q8_0.gguf", Draft: "Qwen3.5-0.8B-Q8_0.gguf"},
+	"qwen3-atlas":   {GGUF: "Qwen3-14B-Q4_K_M.gguf", Draft: "Qwen3-0.6B-Q8_0.gguf"},
+}
+
+var signalsDir = envOr("ATLAS_SIGNALS_DIR", "/signals")
+var swapMu sync.Mutex
+
+// resolveModelAlias checks if the requested model is a known alias.
+// Returns (gguf, draft, true) if alias found.
+func resolveModelAlias(model string) (string, string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if entry, ok := modelRegistry[lower]; ok {
+		return entry.GGUF, entry.Draft, true
+	}
+	// Also match without -atlas suffix: "qwen3.5" -> "qwen3.5-atlas"
+	if entry, ok := modelRegistry[lower+"-atlas"]; ok {
+		return entry.GGUF, entry.Draft, true
+	}
+	return "", "", false
+}
+
+// getCurrentModel reads the currently loaded model from signals/current-model.
+func getCurrentModel() string {
+	data, err := os.ReadFile(filepath.Join(signalsDir, "current-model"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// swapModelViaSignal writes a swap command to signals/llama-command
+// and waits for llama-server to become healthy with the new model.
+// Signal format: swap:<gguf>:<draft>:<timestamp>
+// llama-bridge.py (WSL2) watches this file and executes the swap.
+func swapModelViaSignal(gguf, draft string) error {
+	current := getCurrentModel()
+	if current == gguf {
+		log.Printf("[model-swap] %s already loaded", gguf)
+		return nil
+	}
+
+	cmd := fmt.Sprintf("swap:%s:%s:%d", gguf, draft, time.Now().Unix())
+	cmdPath := filepath.Join(signalsDir, "llama-command")
+	if err := os.WriteFile(cmdPath, []byte(cmd), 0644); err != nil {
+		return fmt.Errorf("write swap signal: %w", err)
+	}
+	log.Printf("[model-swap] Signal written: %s", cmd)
+
+	// Wait for llama-server health (up to 180s)
+	log.Printf("[model-swap] Waiting for llama-server health...")
+	deadline := time.Now().Add(180 * time.Second)
+	client := &http.Client{Timeout: 5 * time.Second}
+	// Brief pause for llama-server to stop before polling
+	time.Sleep(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(inferenceURL + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				log.Printf("[model-swap] Healthy with %s", gguf)
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("llama-server not healthy after 180s")
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -1167,6 +1249,21 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalRequests.Add(1)
+
+	// Model alias resolution: swap llama-server model if client requests
+	// a specific model alias (e.g. "qwen3.5-atlas", "qwen3-atlas").
+	// Uses signal-file protocol: writes to /signals/llama-command,
+	// llama-bridge.py on WSL2 picks it up and restarts llama-server.
+	if gguf, draft, isAlias := resolveModelAlias(req.Model); isAlias {
+		swapMu.Lock()
+		swapErr := swapModelViaSignal(gguf, draft)
+		swapMu.Unlock()
+		if swapErr != nil {
+			log.Printf("[model-swap] failed: %v", swapErr)
+			http.Error(w, fmt.Sprintf("model swap failed: %v", swapErr), 503)
+			return
+		}
+	}
 
 	// Streaming: use SSE passthrough with post-stream verification
 	if req.Stream {
