@@ -385,6 +385,7 @@ func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -2764,6 +2765,7 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 		Model: modelName,
 		Messages: []ChatMessage{
 			{Role: "system", Content: `Classify complexity. Reply with ONLY one digit: 0, 1, 2, or 3.`},
+			{Role: "system", Content: `Classify complexity. Reply with ONLY one digit: 0, 1, 2, or 3. /nothink`},
 			{Role: "user", Content: "hi!"},
 			{Role: "assistant", Content: "0"},
 			{Role: "user", Content: "what does this function do?"},
@@ -2792,6 +2794,7 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 	}
 
 	// Classification timeout — model needs ~1-2s on GPU
+	// Classification timeout -- 5s is sufficient with /nothink disabled thinking
 	classifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
