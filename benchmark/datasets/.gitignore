@@ -1,0 +1,3 @@
+# Dataset cache lives in ~/.cache/atlas/datasets/ (shared across worktrees).
+# This entry prevents accidental commits or broken symlinks.
+.cache/
