@@ -98,8 +98,19 @@ class BenchmarkConfig:
 
     @property
     def cache_dir(self) -> Path:
-        """Dataset cache directory."""
-        return self.datasets_dir / ".cache"
+        """Dataset cache directory.
+
+        Uses a shared user-level cache so all worktrees and the main
+        repo find the same downloaded datasets.  Override with the
+        ATLAS_DATASET_CACHE environment variable.
+
+        Default: $XDG_CACHE_HOME/atlas/datasets  (~/.cache/atlas/datasets)
+        """
+        env = os.environ.get('ATLAS_DATASET_CACHE')
+        if env:
+            return Path(env)
+        xdg = os.environ.get('XDG_CACHE_HOME', str(Path.home() / '.cache'))
+        return Path(xdg) / 'atlas' / 'datasets' 
 
     @property
     def custom_dir(self) -> Path:
