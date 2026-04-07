@@ -122,6 +122,8 @@ services:
     build:
       context: ./atlas-proxy
     extra_hosts: *host-gateway
+    volumes:
+      - ../signals:/signals
     environment:
       - ATLAS_PROXY_PORT=8090
       - ATLAS_INFERENCE_URL=http://llama-server:8090
