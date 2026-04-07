@@ -2734,6 +2734,13 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 		return Tier0Conversational
 	}
 
+	// Greeting prefix: short messages starting with greetings are conversational
+	greetingPrefixes := []string{"hello", "hey ", "hi ", "howdy", "greetings", "good morning", "good afternoon", "good evening"}
+	for _, prefix := range greetingPrefixes {
+		if strings.HasPrefix(lowerTrimmed, prefix) && len(trimmed) < 40 {
+			return Tier0Conversational
+		}
+	}
 	// File-context awareness: if Aider sent file contents, this is an edit (T1/T2)
 	// Aider includes file content in system messages like "filename.py\n```\n...code...\n```"
 	// or in user messages with file paths. If we detect file content, cap at T2.
