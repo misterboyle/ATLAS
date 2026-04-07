@@ -2777,7 +2777,7 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 			{Role: "assistant", Content: "2"},
 			{Role: "user", Content: "thanks, that worked"},
 			{Role: "assistant", Content: "0"},
-			{Role: "user", Content: trimmed},
+			{Role: "user", Content: "/nothink\n" + trimmed},
 		},
 		MaxTokens:   5,
 		Temperature: 0,
