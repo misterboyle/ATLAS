@@ -161,7 +161,7 @@ x-host-gateway: &host-gateway
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_V3_URL=http://v3-service:8070
-      - ATLAS_AGENT_LOOP=1
+      - ATLAS_AGENT_LOOP=${ATLAS_AGENT_LOOP:-0}  # 0=transparent proxy (thinking), 1=agent loop (JSON constrained)
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
     ports:
       - "${ATLAS_PROXY_PORT:-8090}:8090"
