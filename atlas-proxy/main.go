@@ -362,19 +362,12 @@ func buildRepairPrompt(code string, analysis ErrorAnalysis, attempt int) string 
 func forwardToFox(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	req.Model = modelName
 
-	// Inject /nothink into the LAST user message (not necessarily the last message)
-	// to prevent Qwen3.5 from wasting tokens on <think> blocks
-	if len(req.Messages) > 0 {
-		for i := len(req.Messages) - 1; i >= 0; i-- {
-			if req.Messages[i].Role == "user" && !strings.Contains(req.Messages[i].Content, "/nothink") {
-				req.Messages[i] = ChatMessage{
-					Role:    "user",
-					Content: "/nothink\n" + req.Messages[i].Content,
-				}
-				break
-			}
-		}
-	}
+	// NOTE: /nothink removed from general inference (2026-04-07).
+	// Qwen3.5 thinking mode improves code quality significantly (80% vs ~50%).
+	// /nothink is ONLY used in classifyIntent() where the 5s timeout requires it.
+	// The model's <think> blocks are handled by extractModelResponse() which
+	// finds the first '{' in agent loop output, and are passed through in
+	// streaming responses.
 
 	body, _ := json.Marshal(req)
 
@@ -1736,7 +1729,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 					Model: modelName,
 					Messages: []ChatMessage{
 						{Role: "system", Content: "You create single files. Return the file in the exact format requested."},
-						{Role: "user", Content: "/nothink\n" + singlePrompt},
+						{Role: "user", Content: singlePrompt},
 					},
 					MaxTokens:   4096,
 					Temperature: 0.3,
@@ -1787,7 +1780,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	// This ensures Aider sees properly formatted whole-file output
 	if tier >= Tier1Simple {
 		log.Printf("  buffered generation for format-repair...")
-		// Deep-copy messages so forwardToFox's /nothink injection doesn't
+		// Deep-copy messages so forwardToFox doesn't mutate the original
 		// mutate the original req.Messages (needed for filename extraction later)
 		bufMsgs := make([]ChatMessage, len(req.Messages))
 		copy(bufMsgs, req.Messages)
@@ -1887,7 +1880,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 				reformatReq := ChatRequest{
 					Model: modelName,
 					Messages: []ChatMessage{
-						{Role: "user", Content: fmt.Sprintf("/nothink\nReformat this code as a file listing. Output ONLY this exact format:\n%s\n```%s\n<the code>\n```\n\nHere is the code to reformat:\n%s", userHintFilename, lang, content)},
+						{Role: "user", Content: fmt.Sprintf("Reformat this code as a file listing. Output ONLY this exact format:\n%s\n```%s\n<the code>\n```\n\nHere is the code to reformat:\n%s", userHintFilename, lang, content)},
 					},
 					MaxTokens: 4096, Temperature: 0, Stream: false,
 				}
@@ -1960,7 +1953,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 					break
 				}
 				correction := fmt.Sprintf(
-					"/nothink\nThis code is missing %s. Add it to the code below and return the COMPLETE updated file.\n\nRequirements:\n- %s\n- import json at the top\n- Use json.dump() to save and json.load() to read\n- Use open() for file I/O\n\nExisting code:\n```\n%s\n```\n\nReturn the complete updated file with the feature added.",
+					"This code is missing %s. Add it to the code below and return the COMPLETE updated file.\n\nRequirements:\n- %s\n- import json at the top\n- Use json.dump() to save and json.load() to read\n- Use open() for file I/O\n\nExisting code:\n```\n%s\n```\n\nReturn the complete updated file with the feature added.",
 					featureMissing, featureUserMsg, existingCode,
 				)
 				retryReq := ChatRequest{
