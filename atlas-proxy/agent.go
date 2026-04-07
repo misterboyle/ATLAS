@@ -391,8 +391,8 @@ func needsPermission(ctx *AgentContext, toolName string, args json.RawMessage) b
 func buildSystemPrompt(ctx *AgentContext) string {
 	var sb strings.Builder
 
-	// /nothink suppresses Qwen3.5's <think> mode — critical for JSON output
-	sb.WriteString("/nothink\nYou are ATLAS, a coding assistant that creates and modifies code by calling tools. ")
+	// Thinking mode enabled -- extractModelResponse() handles <think> blocks
+	sb.WriteString("You are ATLAS, a coding assistant that creates and modifies code by calling tools. ")
 	sb.WriteString("You have access to the filesystem and can run commands to verify your work.\n")
 	sb.WriteString("You MUST respond with ONLY a single valid JSON object, no other text.\n\n")
 
