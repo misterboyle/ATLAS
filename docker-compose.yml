@@ -92,7 +92,7 @@ services:
   # --- Sandbox (isolated code execution) ---
   sandbox:
     build:
-      context: ./sandbox
+      context: ./atlas/sandbox
     environment:
       - TMPDIR=/tmp/sandbox
       - HOME=/tmp/sandbox
