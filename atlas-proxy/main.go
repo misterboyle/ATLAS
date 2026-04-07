@@ -2784,8 +2784,9 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 		Stop:        []string{"\n"},
 	}
 
-	// Classification timeout -- 5s is sufficient with /nothink disabled thinking
-	classifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Classification timeout -- 10s for 22-message few-shot prompt on potentially cold server
+	// /nothink in user message disables thinking; latency is prompt processing only
+	classifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	resp, err := forwardToFox(classifyCtx, classifyReq)
