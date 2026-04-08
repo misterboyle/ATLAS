@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "atlas_src",
+  "project_id": "1ae84600-7cbc-4169-8e9c-7d1db637c370"
+}
