@@ -40,8 +40,7 @@ services:
   # --- Geometric Lens (C(x)/G(x) scoring) ---
   geometric-lens:
     build:
-      context: ./rag-api
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8099"]
+      context: ./geometric-lens
     extra_hosts: *host-gateway
     environment:
       - LLAMA_URL=http://llama-server:8090
@@ -50,7 +49,7 @@ services:
       - PROJECT_DATA_DIR=/data/projects
     volumes:
       - lens-data:/data/projects
-      - ${ATLAS_LENS_MODELS:-./rag-api/geometric_lens/models}:/app/geometric_lens/models:ro
+      - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
     ports:
       - "${ATLAS_LENS_PORT:-8099}:8099"
     depends_on:
@@ -67,8 +66,8 @@ services:
   # --- V3 Pipeline Service ---
   v3-service:
     build:
-      context: ./rag-api
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8070"]
+      context: .
+      dockerfile: v3-service/Dockerfile
     extra_hosts: *host-gateway
     environment:
       - ATLAS_INFERENCE_URL=http://llama-server:8090
