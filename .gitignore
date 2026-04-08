@@ -184,3 +184,5 @@ geometric-lens/geometric_lens/gate_report.json
 # ----- Cogitor / worktree artifacts -----
 .worktrees/
 .cogitor.heartbeat
+.agent_logs/
+.cogitor.session_bead_id
