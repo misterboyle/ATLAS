@@ -101,20 +101,21 @@ services:
       - GOMODCACHE=/tmp/sandbox/go/pkg/mod
       - GOCACHE=/tmp/sandbox/go/cache
       - CARGO_HOME=/tmp/sandbox/cargo
-      - RUSTUP_HOME=/root/.rustup
+      - RUSTUP_HOME=/usr/local/rustup
       - npm_config_cache=/tmp/sandbox/npm
     tmpfs:
-      - /tmp/sandbox:size=512M,exec
+      - /tmp:size=512M,exec
     read_only: true
     security_opt:
       - no-new-privileges:true
     ports:
       - "${ATLAS_SANDBOX_PORT:-30820}:8020"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8020/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
       interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 30s
     networks:
       - atlas
 
