@@ -113,6 +113,14 @@
       "keywords": ["contributing", "development", "PR", "pull request", "fork", "branch", "tests", "code style", "PEP8", "commit", "review"],
       "description": "Development setup, code style (Python/Bash/YAML), testing, commit format, PR workflow.",
       "coupled_files": ["CONTRIBUTING.md"]
+    },
+    {
+      "id": "worktree-operations",
+      "title": "Worktree-Aware Operations",
+      "file": "worktree-operations.md",
+      "keywords": ["worktree", "git", "cogitor", "heartbeat", "session_bead_id", ".gitignore", "tracked", "index", "merge", "session files"],
+      "description": "Worktree-aware practices for agents: cogitor-managed files, common pitfalls (content edits on unread files, gitignore vs tracked), merge workflow.",
+      "coupled_files": [".gitignore"]
     }
   ]
 }
