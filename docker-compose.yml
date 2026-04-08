@@ -17,7 +17,7 @@ services:
     ports:
       - "${ATLAS_LIFECYCLE_PORT:-8085}:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "--timeout=5", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-qO-", "--timeout=5", "http://127.0.0.1:8080/health"]
       interval: 15s
       timeout: 5s
       retries: 10
