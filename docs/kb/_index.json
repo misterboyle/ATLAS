@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "description": "Knowledge base for atlas-src. Sections cover architecture, services, pipeline, scoring, deployment, and benchmarks for on-demand retrieval via NEED_KB.",
+  "sections": [
+    {
+      "id": "architecture-overview",
+      "title": "ATLAS Architecture Overview",
+      "file": "architecture-overview.md",
+      "keywords": ["architecture", "overview", "two-layer", "agent loop", "v3 pipeline", "system design", "components", "data flow"],
+      "description": "High-level two-layer architecture: outer agent loop + inner V3 pipeline. Service stack and data flow summary.",
+      "coupled_files": ["docs/ARCHITECTURE.md"]
+    },
+    {
+      "id": "services",
+      "title": "ATLAS Services (5-Service Stack)",
+      "file": "services.md",
+      "keywords": ["services", "llama-server", "atlas-proxy", "v3-service", "geometric-lens", "sandbox", "ports", "docker", "containers", "startup"],
+      "description": "The 5 services: llama-server, atlas-proxy, v3-service, geometric-lens, sandbox. Ports, languages, startup order.",
+      "coupled_files": ["docker-compose.yml"]
+    },
+    {
+      "id": "agent-loop",
+      "title": "Agent Loop (atlas-proxy)",
+      "file": "agent-loop.md",
+      "keywords": ["agent", "loop", "proxy", "grammar", "tools", "tier", "classification", "T0", "T1", "T2", "T3", "exploration budget", "safety", "limits", "JSON"],
+      "description": "Atlas-proxy agent loop: grammar-constrained JSON, 8 tools, per-file tier classification, safety limits.",
+      "coupled_files": ["atlas-proxy/agent.go", "atlas-proxy/tools.go", "atlas-proxy/grammar.go"]
+    },
+    {
+      "id": "v3-pipeline",
+      "title": "V3 Pipeline (Inner Layer)",
+      "file": "v3-pipeline.md",
+      "keywords": ["v3", "pipeline", "phases", "PlanSearch", "DivSampling", "BudgetForcing", "PR-CoT", "repair", "refinement", "derivation", "candidates", "probe"],
+      "description": "V3 pipeline phases 0-3: probe, constraint-driven generation, verification/selection, repair strategies. 19 modules.",
+      "coupled_files": ["v3-service/main.py", "benchmark/v3/__init__.py"]
+    },
+    {
+      "id": "geometric-lens",
+      "title": "Geometric Lens (Scoring, RAG, Routing)",
+      "file": "geometric-lens.md",
+      "keywords": ["lens", "geometric", "scoring", "C(x)", "G(x)", "cost field", "XGBoost", "RAG", "indexer", "retriever", "router", "pattern cache", "Thompson", "energy"],
+      "description": "Geometric Lens: C(x) energy scoring, G(x) XGBoost, RAG/PageIndex, confidence routing, pattern cache.",
+      "coupled_files": ["geometric-lens/main.py", "geometric-lens/geometric_lens/cost_field.py", "geometric-lens/geometric_lens/service.py"]
+    },
+    {
+      "id": "sandbox",
+      "title": "Sandbox (Isolated Code Execution)",
+      "file": "sandbox.md",
+      "keywords": ["sandbox", "execution", "languages", "python", "javascript", "typescript", "go", "rust", "c", "bash", "linting", "testing", "build verification"],
+      "description": "Sandbox service: 8-language isolated execution, build verification, linting, error classification, resource limits.",
+      "coupled_files": ["sandbox/executor_server.py"]
+    },
+    {
+      "id": "deployment",
+      "title": "Deployment (Docker, Bare Metal, K3s)",
+      "file": "deployment.md",
+      "keywords": ["deployment", "docker", "compose", "bare metal", "k3s", "kubernetes", "install", "setup", "VRAM", "GPU", "startup"],
+      "description": "Three deployment modes: Docker Compose, bare metal, K3s. VRAM budget, startup order, prerequisites.",
+      "coupled_files": ["docker-compose.yml", "scripts/install.sh"]
+    },
+    {
+      "id": "benchmarks",
+      "title": "Benchmark Infrastructure and Results",
+      "file": "benchmarks.md",
+      "keywords": ["benchmark", "LiveCodeBench", "HumanEval", "MBPP", "GPQA", "SciCode", "ablation", "pass@k", "datasets", "runner", "results"],
+      "description": "Benchmark runner, 9 dataset loaders, V3 ablation results (74.6% LCB), analysis utilities.",
+      "coupled_files": ["benchmark/cli.py", "benchmark/v3_runner.py"]
+    },
+    {
+      "id": "project-map",
+      "title": "Repository Structure and File Map",
+      "file": "project-map.md",
+      "keywords": ["map", "structure", "files", "directories", "repository", "layout", "modules", "organization"],
+      "description": "Top-level directory layout, key file purposes, documentation index, test structure.",
+      "coupled_files": ["docs/MAP.md"]
+    },
+    {
+      "id": "configuration",
+      "title": "Configuration and Environment Variables",
+      "file": "configuration.md",
+      "keywords": ["config", "configuration", "environment", "variables", "env", "ports", "atlas.conf", "settings", "VRAM", "context", "aider"],
+      "description": "Environment variables, port assignments, atlas.conf settings, VRAM budget, Aider integration.",
+      "coupled_files": ["docker-compose.yml", ".env.example"]
+    }
+  ]
+}
