@@ -1,3 +1,2 @@
-# models/ -- stub package (upstream v3.0.1 data model definitions)
-# Created to satisfy Dockerfile COPY models/ models/
-# TODO: restore full model definitions from upstream if needed
+# models/ -- data models for geometric-lens (restored from upstream rag-api)
+# Modules: tree_node, route, pattern
