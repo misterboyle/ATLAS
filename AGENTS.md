@@ -1,21 +1,20 @@
-# AGENTS.md -- Remote Agent Guidelines
+# AGENTS.md -- Supplemental Agent Guidelines
 
-## 1. Read Architecture Before Working
+These supplement the bootstrap rules you already received.
+Do NOT duplicate effort -- bootstrap covers bd usage, KB search
+directives, claim-before-work, and proactive issue filing.
 
-Before making any changes, query the knowledge base:
+## 1. Read Architecture First
 
-```
-NEED_KB: architecture overview
-NEED_KB: <component you are about to change>
-```
+Before changing any code, query `NEED_KB: architecture overview` and
+`NEED_KB: <component you are changing>`. Understand the two-layer
+architecture (agent loop + V3 pipeline) and the 5-service stack before
+making design decisions.
 
-The KB is searchable and instant -- always cheaper than guessing.
-Use `NEED_KB_LIST:` to see all available sections.
+## 2. Refspec Push (Worktree-Specific)
 
-## 2. Session Completion -- Refspec Push (Critical)
-
-You work in an isolated worktree. **Never push your agent branch as a
-remote branch.** Use the refspec pattern to push directly to the parent:
+Bootstrap says "merge into parent branch and push" -- here is the
+exact pattern for worktree agents:
 
 ```bash
 PARENT=<parent-branch>   # from workspace_info.parent_branch
@@ -26,39 +25,21 @@ make test
 git push origin HEAD:"$PARENT"
 ```
 
-If push is rejected (another agent pushed first), retry:
+Retry on rejection (another agent pushed first):
 
 ```bash
 git fetch origin && git rebase origin/"$PARENT" && make test && git push origin HEAD:"$PARENT"
 ```
 
-Rules:
-- **You** must push -- never say "ready when you are"
-- Commit, rebase, test, and push in the **same** iteration
+Critical rules not in bootstrap:
+- Do NOT push `agent/*` as remote branches -- use `HEAD:$PARENT` refspec
 - Do NOT checkout or merge in the main repo root
-- Do NOT push `agent/*` as remote branches
 - Do NOT rewrite history on shared branches (no force-push, no interactive rebase)
+- Commit, rebase, test, and push must be in the **same** iteration
 
-## 3. Document Issues with Beads
+## 3. Update Architecture Docs When You Change Architecture
 
-Use `bd` for all issue tracking. File issues for anything you discover:
-
-```bash
-bd create "<description>" --type bug --priority 3
-```
-
-Before starting work, always claim:
-
-```bash
-bd update <id> --claim
-```
-
-If the claim fails (another agent took it), pick a different bead.
-
-## 4. Keep Architecture Docs Current
-
-If you change the architecture (add/remove services, alter data flow,
-change module boundaries), update the relevant KB section under `docs/kb/`
-and its entry in `docs/kb/_index.json`. Set `coupled_files` so future
-changes trigger a review flag. Always `git add -A` to capture
-`docs/kb/_usage.json` updates.
+If you add/remove services, alter data flow, or change module boundaries:
+1. Update the relevant section under `docs/kb/`
+2. Update its entry in `docs/kb/_index.json`
+3. Set `coupled_files` to the source files so future changes trigger review
