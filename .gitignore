@@ -132,7 +132,7 @@ templates/embedding-deployment.yaml.tmpl
 models/
 
 # ----- Benchmark -----
-benchmark/datasets/.cache/
+benchmark/datasets/.cache
 benchmark/results/
 benchmark/result/
 v2_5_results/
