@@ -51,6 +51,123 @@ class ExecuteResponse(BaseModel):
 def health_check():
     return {"status": "healthy"}
 
+
+class SyntaxCheckRequest(BaseModel):
+    code: str
+    language: str = "python"
+    filename: Optional[str] = None
+
+
+@app.post("/syntax-check")
+def syntax_check(request: SyntaxCheckRequest):
+    """Check code syntax without executing. Used by atlas-proxy syntax repair loop."""
+    start = time.time()
+    lang = request.language.lower()
+
+    if lang == "python":
+        try:
+            compile(request.code, request.filename or "<sandbox>", "exec")
+            return {
+                "valid": True,
+                "errors": [],
+                "language": lang,
+                "check_time_ms": int((time.time() - start) * 1000),
+            }
+        except SyntaxError as e:
+            return {
+                "valid": False,
+                "errors": [f"Line {e.lineno}: {e.msg}"],
+                "language": lang,
+                "check_time_ms": int((time.time() - start) * 1000),
+            }
+
+    # Map languages to their syntax-check commands
+    checkers = {
+        "javascript": ["node", "--check"],
+        "js": ["node", "--check"],
+        "typescript": ["tsc", "--noEmit", "--allowJs"],
+        "ts": ["tsc", "--noEmit"],
+        "c": ["gcc", "-fsyntax-only", "-x", "c"],
+        "cpp": ["g++", "-fsyntax-only", "-x", "c++"],
+        "c++": ["g++", "-fsyntax-only", "-x", "c++"],
+        "go": ["go", "vet"],
+        "golang": ["go", "vet"],
+        "rust": ["rustc", "--edition", "2021", "--crate-type", "lib", "--error-format", "short"],
+        "rs": ["rustc", "--edition", "2021", "--crate-type", "lib", "--error-format", "short"],
+        "bash": ["bash", "-n"],
+        "shell": ["bash", "-n"],
+        "sh": ["bash", "-n"],
+    }
+
+    cmd_base = checkers.get(lang)
+    if not cmd_base:
+        return {
+            "valid": True,
+            "errors": [],
+            "language": lang,
+            "check_time_ms": int((time.time() - start) * 1000),
+        }
+
+    ext_map = {
+        "javascript": ".js", "js": ".js",
+        "typescript": ".ts", "ts": ".ts",
+        "c": ".c", "cpp": ".cpp", "c++": ".cpp",
+        "go": ".go", "golang": ".go",
+        "rust": ".rs", "rs": ".rs",
+        "bash": ".sh", "shell": ".sh", "sh": ".sh",
+    }
+    ext = ext_map.get(lang, ".txt")
+    tmp_path = None
+    try:
+        WORKSPACE_BASE.mkdir(parents=True, exist_ok=True)
+        fd = tempfile.NamedTemporaryFile(
+            suffix=ext, dir=WORKSPACE_BASE, mode="w", delete=False,
+        )
+        fd.write(request.code)
+        fd.close()
+        tmp_path = fd.name
+
+        if lang in ("go", "golang"):
+            proc = subprocess.run(
+                ["go", "build", "-o", "/dev/null", tmp_path],
+                capture_output=True, text=True, timeout=15,
+            )
+        else:
+            proc = subprocess.run(
+                cmd_base + [tmp_path],
+                capture_output=True, text=True, timeout=15,
+            )
+
+        elapsed = int((time.time() - start) * 1000)
+        if proc.returncode == 0:
+            return {"valid": True, "errors": [], "language": lang, "check_time_ms": elapsed}
+
+        err_text = (proc.stderr or proc.stdout or "").strip()
+        errors = [line for line in err_text.splitlines()[:10] if line.strip()]
+        return {"valid": False, "errors": errors, "language": lang, "check_time_ms": elapsed}
+
+    except subprocess.TimeoutExpired:
+        return {
+            "valid": False,
+            "errors": ["Syntax check timed out (15s)"],
+            "language": lang,
+            "check_time_ms": int((time.time() - start) * 1000),
+        }
+    except Exception as e:
+        return {
+            "valid": False,
+            "errors": [str(e)[:500]],
+            "language": lang,
+            "check_time_ms": int((time.time() - start) * 1000),
+        }
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 @app.post("/execute", response_model=ExecuteResponse)
 def execute_code(request: ExecuteRequest):
     """Execute code in isolated environment."""
