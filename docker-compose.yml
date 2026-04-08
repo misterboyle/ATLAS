@@ -1,34 +1,27 @@
+# x-host-gateway: YAML anchor for host DNS resolution in all services
+x-host-gateway: &host-gateway
+  - "host.docker.internal:host-gateway"
+
 services:
-  # --- LLM Inference (CUDA + grammar support) ---
-  llama-server:
-    build:
-      context: ./inference
-      dockerfile: Dockerfile.v31
-    # GPU access: works with Docker (nvidia runtime) and Podman (--device)
-    devices:
-      - /dev/nvidia0:/dev/nvidia0
-      - /dev/nvidiactl:/dev/nvidiactl
-      - /dev/nvidia-uvm:/dev/nvidia-uvm
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+  # --- llama-lifecycle (signal-file bridge to host llama-server) ---
+  # Replaces the NVIDIA CUDA llama-server container.
+  # llama-server runs natively on Windows (AMD ROCm); this Alpine container
+  # manages start/stop/swap via signal files shared with llama-bridge.py.
+  llama-lifecycle:
+    image: alpine:3.20
     volumes:
-      - ${ATLAS_MODELS_DIR:-./models}:/models:ro
-    command: >
-      /llama-server
-      --model /models/${ATLAS_MODEL_FILE:-Qwen3.5-9B-Q6_K.gguf}
-      --host 0.0.0.0 --port 8080
-      --ctx-size ${ATLAS_CTX_SIZE:-32768}
-      --n-gpu-layers 99
-      --no-mmap
+      - ./signals:/signals
+      - ./scripts/lib/llama-lifecycle.sh:/llama-lifecycle.sh:ro
+    extra_hosts: *host-gateway
+    command: ["sh", "/llama-lifecycle.sh"]
     ports:
-      - "${ATLAS_LLAMA_PORT:-8080}:8080"
+      - "${ATLAS_LIFECYCLE_PORT:-8085}:8080"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "wget", "-qO-", "--timeout=5", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
       retries: 10
-      start_period: 120s
+      start_period: 30s
     networks:
       - atlas
 
@@ -37,8 +30,8 @@ services:
     build:
       context: ./geometric-lens
     environment:
-      - LLAMA_URL=http://llama-server:8080
-      - LLAMA_EMBED_URL=http://llama-server:8080
+      - LLAMA_URL=http://host.docker.internal:8090
+      - LLAMA_EMBED_URL=http://host.docker.internal:8090
       - GEOMETRIC_LENS_ENABLED=true
       - PROJECT_DATA_DIR=/data/projects
     volumes:
@@ -46,8 +39,9 @@ services:
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
     ports:
       - "${ATLAS_LENS_PORT:-8099}:8099"
+    extra_hosts: *host-gateway
     depends_on:
-      llama-server:
+      llama-lifecycle:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
@@ -63,14 +57,15 @@ services:
       context: .
       dockerfile: v3-service/Dockerfile
     environment:
-      - ATLAS_INFERENCE_URL=http://llama-server:8080
+      - ATLAS_INFERENCE_URL=http://host.docker.internal:8090
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
     ports:
       - "${ATLAS_V3_PORT:-8070}:8070"
+    extra_hosts: *host-gateway
     depends_on:
-      llama-server:
+      llama-lifecycle:
         condition: service_healthy
       geometric-lens:
         condition: service_healthy
@@ -93,6 +88,7 @@ services:
       - no-new-privileges:true
     ports:
       - "${ATLAS_SANDBOX_PORT:-30820}:8020"
+    extra_hosts: *host-gateway
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8020/health"]
       interval: 15s
@@ -107,8 +103,8 @@ services:
       context: ./atlas-proxy
     environment:
       - ATLAS_PROXY_PORT=8090
-      - ATLAS_INFERENCE_URL=http://llama-server:8080
-      - ATLAS_LLAMA_URL=http://llama-server:8080
+      - ATLAS_INFERENCE_URL=http://host.docker.internal:8090
+      - ATLAS_LLAMA_URL=http://host.docker.internal:8090
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_V3_URL=http://v3-service:8070
@@ -116,8 +112,9 @@ services:
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:-Qwen3.5-9B-Q6_K}
     ports:
       - "${ATLAS_PROXY_PORT:-8090}:8090"
+    extra_hosts: *host-gateway
     depends_on:
-      llama-server:
+      llama-lifecycle:
         condition: service_healthy
       geometric-lens:
         condition: service_healthy
