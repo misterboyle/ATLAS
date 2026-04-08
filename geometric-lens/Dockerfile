@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py .
 COPY indexer/ indexer/
 COPY retriever/ retriever/
-RUN mkdir -p models/
+COPY models/ models/
 COPY cache/ cache/
 COPY router/ router/
 COPY geometric_lens/ geometric_lens/
