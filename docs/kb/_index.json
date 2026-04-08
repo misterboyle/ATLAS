@@ -81,6 +81,38 @@
       "keywords": ["config", "configuration", "environment", "variables", "env", "ports", "atlas.conf", "settings", "VRAM", "context", "aider"],
       "description": "Environment variables, port assignments, atlas.conf settings, VRAM budget, Aider integration.",
       "coupled_files": ["docker-compose.yml", ".env.example"]
+    },
+    {
+      "id": "building-and-setup",
+      "title": "Building and Setup",
+      "file": "building-and-setup.md",
+      "keywords": ["build", "setup", "install", "docker", "compose", "bare metal", "k3s", "clone", "model", "download", "pip", "go", "containers", "first run", "verify"],
+      "description": "Step-by-step build instructions for Docker Compose, bare metal, and K3s. Model download, first-run behavior, verification.",
+      "coupled_files": ["docs/SETUP.md", "scripts/install.sh"]
+    },
+    {
+      "id": "cli-usage",
+      "title": "CLI Usage and Workflow",
+      "file": "cli-usage.md",
+      "keywords": ["cli", "atlas", "aider", "launch", "streaming", "repl", "solve", "bench", "status", "workflow", "tips", "icons", "output"],
+      "description": "CLI launching, streaming output, status icons, workflow examples, REPL commands, tips for best results.",
+      "coupled_files": ["docs/CLI.md", "atlas/cli/repl.py"]
+    },
+    {
+      "id": "troubleshooting",
+      "title": "Troubleshooting Guide",
+      "file": "troubleshooting.md",
+      "keywords": ["troubleshooting", "debug", "error", "fix", "GPU", "VRAM", "OOM", "health", "timeout", "port", "conflict", "sandbox", "lens", "proxy", "docker", "SELinux"],
+      "description": "Common issues by service: Docker/GPU, llama-server, proxy, Lens, sandbox. Quick diagnostics and fixes.",
+      "coupled_files": ["docs/TROUBLESHOOTING.md"]
+    },
+    {
+      "id": "contributing",
+      "title": "Contributing and Development Workflow",
+      "file": "contributing.md",
+      "keywords": ["contributing", "development", "PR", "pull request", "fork", "branch", "tests", "code style", "PEP8", "commit", "review"],
+      "description": "Development setup, code style (Python/Bash/YAML), testing, commit format, PR workflow.",
+      "coupled_files": ["CONTRIBUTING.md"]
     }
   ]
 }
