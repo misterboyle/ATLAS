@@ -81,8 +81,17 @@ services:
   sandbox:
     build:
       context: ./sandbox
+    environment:
+      - TMPDIR=/tmp
+      - HOME=/tmp/home
+      - GOPATH=/tmp/go
+      - GOMODCACHE=/tmp/go/pkg/mod
+      - GOCACHE=/tmp/go-cache
+      - CARGO_HOME=/tmp/cargo
+      - RUSTUP_HOME=/tmp/rustup
+      - npm_config_cache=/tmp/npm-cache
     tmpfs:
-      - /tmp/sandbox:size=512M
+      - /tmp:size=512M,exec
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -90,10 +99,11 @@ services:
       - "${ATLAS_SANDBOX_PORT:-30820}:8020"
     extra_hosts: *host-gateway
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8020/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')"]
       interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 30s
     networks:
       - atlas
 
