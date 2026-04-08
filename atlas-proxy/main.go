@@ -114,19 +114,44 @@ func swapModelViaSignal(gguf, draft string) error {
 		return nil
 	}
 
-	cmd := fmt.Sprintf("swap:%s:%s:%d", gguf, draft, time.Now().Unix())
-	cmdPath := filepath.Join(signalsDir, "llama-command")
-	if err := os.WriteFile(cmdPath, []byte(cmd), 0644); err != nil {
-		return fmt.Errorf("write swap signal: %w", err)
+	// Call llama-lifecycle HTTP endpoint to request the swap.
+	// Architecture: proxy->lifecycle(HTTP)->bridge(signal file)->WSL2
+	// Signal files are ONLY for Docker-to-WSL2 (where HTTP doesn't work).
+	// Container-to-container uses HTTP via Docker DNS.
+	lifecycleURL := envOr("ATLAS_LIFECYCLE_URL", "http://llama-lifecycle:8080")
+	swapPayload, _ := json.Marshal(map[string]string{"model": gguf, "draft": draft})
+	swapReq, _ := http.NewRequest("POST", lifecycleURL+"/swap", bytes.NewReader(swapPayload))
+	swapReq.Header.Set("Content-Type", "application/json")
+	swapClient := &http.Client{Timeout: 10 * time.Second}
+	swapResp, swapErr := swapClient.Do(swapReq)
+	if swapErr != nil {
+		return fmt.Errorf("lifecycle swap request failed: %w", swapErr)
 	}
-	log.Printf("[model-swap] Signal written: %s", cmd)
+	swapResp.Body.Close()
+	if swapResp.StatusCode != 200 {
+		return fmt.Errorf("lifecycle swap returned %d", swapResp.StatusCode)
+	}
+	log.Printf("[model-swap] Lifecycle accepted swap to %s", gguf)
 
-	// Wait for llama-server health (up to 180s)
+	// Phase 1: Wait for bridge to acknowledge swap (current-model updates).
+	// The bridge polls signals/llama-command every 2s, then stops llama-server,
+	// updates atlas.conf, writes current-model, and restarts. We must wait
+	// for current-model to match BEFORE polling health, otherwise we catch
+	// the old llama-server still running.
+	log.Printf("[model-swap] Waiting for bridge to process swap...")
+	bridgeDeadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(bridgeDeadline) {
+		if getCurrentModel() == gguf {
+			log.Printf("[model-swap] Bridge confirmed: current-model=%s", gguf)
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	// Phase 2: Wait for llama-server health with the new model (up to 180s).
 	log.Printf("[model-swap] Waiting for llama-server health...")
 	deadline := time.Now().Add(180 * time.Second)
 	client := &http.Client{Timeout: 5 * time.Second}
-	// Brief pause for llama-server to stop before polling
-	time.Sleep(5 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(inferenceURL + "/health")
 		if err == nil {
@@ -2890,11 +2915,24 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 
 	// Classification timeout -- 10s for 22-message few-shot prompt on potentially cold server
 	// /nothink in user message disables thinking; latency is prompt processing only
-	classifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	resp, err := forwardToFox(classifyCtx, classifyReq)
-	if err != nil {
+	// Retry classify if llama-server is loading a model (503 during swap).
+	var resp ChatCompletionResponse
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		classifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		resp, err = forwardToFox(classifyCtx, classifyReq)
+		cancel()
+		if err == nil {
+			break
+		}
+		// Retry only on 503 "Loading model" (transient during swap)
+		if strings.Contains(err.Error(), "503") && strings.Contains(err.Error(), "Loading model") {
+			if attempt < 3 {
+				log.Printf("  classify: model loading, retry %d/3 in 3s", attempt+1)
+				time.Sleep(3 * time.Second)
+				continue
+			}
+		}
 		log.Printf("  classify failed: %v — defaulting to T1", err)
 		return Tier1Simple
 	}

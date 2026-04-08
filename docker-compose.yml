@@ -66,8 +66,8 @@ services:
   # --- V3 Pipeline Service ---
   v3-service:
     build:
-      context: .
-      dockerfile: v3-service/Dockerfile
+      context: ./rag-api
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8070"]
     extra_hosts: *host-gateway
     environment:
       - ATLAS_INFERENCE_URL=http://llama-server:8090
