@@ -38,13 +38,13 @@ services:
       - lens-data:/data/projects
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
     ports:
-      - "${ATLAS_LENS_PORT:-8099}:8099"
+      - "${ATLAS_LENS_PORT:-8098}:8099"
     extra_hosts: *host-gateway
     depends_on:
       llama-lifecycle:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8099/health')"]
       interval: 15s
       timeout: 5s
       retries: 5
