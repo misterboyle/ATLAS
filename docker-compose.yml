@@ -78,7 +78,7 @@ x-host-gateway: &host-gateway
       - lens-data:/data/projects
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
     ports:
-      - "${ATLAS_LENS_PORT:-8099}:8099"
+      - "${ATLAS_LENS_PORT:-8098}:8099"
     depends_on:
       llama-server:
       llama-lifecycle:
