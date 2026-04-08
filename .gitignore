@@ -180,3 +180,7 @@ geometric-lens/geometric_lens/gate_report.json
 .dolt/
 *.db
 .beads-credential-key
+
+# ----- Cogitor / worktree artifacts -----
+.worktrees/
+.cogitor.heartbeat
