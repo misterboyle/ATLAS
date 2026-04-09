@@ -300,6 +300,15 @@ func callLLMConstrained(ctx *AgentContext, schemaJSON string) (string, int, erro
 		"response_format": map[string]string{
 			"type": "json_object",
 		},
+		// Explicitly disable thinking via jinja chat_template_kwargs.
+		// Qwen3.5 defaults to enable_thinking=true with --jinja; without
+		// this, the model generates <think> blocks that conflict with
+		// JSON grammar and produce empty content. The /nothink text
+		// hint in messages is unreliable -- this is the proper API
+		// mechanism. (blah-sp7)
+		"chat_template_kwargs": map[string]interface{}{
+			"enable_thinking": false,
+		},
 	}
 	body, _ := json.Marshal(reqBody)
 	endpoint := llamaURL + "/v1/chat/completions"

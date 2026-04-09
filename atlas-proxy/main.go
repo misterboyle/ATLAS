@@ -91,14 +91,16 @@ type StreamOptions struct {
 }
 
 type ChatRequest struct {
-	Model          string          `json:"model"`
-	Messages       []ChatMessage   `json:"messages"`
-	MaxTokens      int             `json:"max_tokens,omitempty"`
-	Temperature    float64         `json:"temperature,omitempty"`
-	Stream         bool            `json:"stream,omitempty"`
-	Stop           []string        `json:"stop,omitempty"`
-	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
-	StreamOptions  *StreamOptions  `json:"stream_options,omitempty"`
+	Model              string                 `json:"model"`
+	Messages           []ChatMessage          `json:"messages"`
+	MaxTokens          int                    `json:"max_tokens,omitempty"`
+	Temperature        float64                `json:"temperature,omitempty"`
+	Stream             bool                   `json:"stream,omitempty"`
+	Stop               []string               `json:"stop,omitempty"`
+	ResponseFormat     json.RawMessage        `json:"response_format,omitempty"`
+	StreamOptions      *StreamOptions         `json:"stream_options,omitempty"`
+	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
+	CachePrompt        *bool                  `json:"cache_prompt,omitempty"`
 }
 
 type ChatChoice struct {
