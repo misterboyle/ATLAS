@@ -1,7 +1,7 @@
 {
   "session-workflow": {
-    "hit_count": 4,
-    "last_hit": "2026-04-08T17:29:03.576745+00:00"
+    "hit_count": 5,
+    "last_hit": "2026-04-09T03:47:28.075097+00:00"
   },
   "orchestrator-cleanup": {
     "hit_count": 3,
@@ -12,27 +12,31 @@
     "last_hit": "2026-04-08T17:06:47.976722+00:00"
   },
   "issue-tracking": {
-    "hit_count": 1,
-    "last_hit": "2026-04-08T17:13:28.102544+00:00"
+    "hit_count": 2,
+    "last_hit": "2026-04-09T03:47:28.076160+00:00"
   },
   "kb-maintenance": {
-    "hit_count": 1,
-    "last_hit": "2026-04-08T17:13:28.102960+00:00"
+    "hit_count": 2,
+    "last_hit": "2026-04-09T03:47:28.076160+00:00"
   },
   "git-safety": {
     "hit_count": 1,
     "last_hit": "2026-04-08T17:13:28.103300+00:00"
   },
   "bootstrap": {
-    "hit_count": 1,
-    "last_hit": "2026-04-08T17:18:16.105044+00:00"
+    "hit_count": 2,
+    "last_hit": "2026-04-09T03:47:28.076160+00:00"
   },
   "health-monitoring": {
     "hit_count": 1,
     "last_hit": "2026-04-08T17:29:03.575206+00:00"
   },
   "threshold-config": {
+    "hit_count": 2,
+    "last_hit": "2026-04-09T03:47:28.075097+00:00"
+  },
+  "cli-usage": {
     "hit_count": 1,
-    "last_hit": "2026-04-08T17:29:03.576745+00:00"
+    "last_hit": "2026-04-09T03:47:28.075097+00:00"
   }
 }
