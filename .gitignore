@@ -186,3 +186,7 @@ geometric-lens/geometric_lens/gate_report.json
 .cogitor.heartbeat
 .agent_logs/
 .cogitor.session_bead_id
+
+# Cogitor agent files (auto-added)
+.cogitor*
+.spawn_manifest.json
