@@ -1420,7 +1420,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 				break
 			}
 		}
-		if isDeleteRequest(userMsg) {
+		if isDeleteRequest(userMsg) && len(req.ResponseFormat) == 0 {
 			log.Printf("  delete fast-path: %s", truncate(userMsg, 80))
 			projectDir := detectRealProjectDir(req.Messages)
 			if projectDir != "" {
