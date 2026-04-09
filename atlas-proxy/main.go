@@ -86,6 +86,10 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
+}
+
 type ChatRequest struct {
 	Model          string          `json:"model"`
 	Messages       []ChatMessage   `json:"messages"`
@@ -94,6 +98,7 @@ type ChatRequest struct {
 	Stream         bool            `json:"stream,omitempty"`
 	Stop           []string        `json:"stop,omitempty"`
 	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
+	StreamOptions  *StreamOptions  `json:"stream_options,omitempty"`
 }
 
 type ChatChoice struct {
@@ -102,10 +107,20 @@ type ChatChoice struct {
 	FinishReason string      `json:"finish_reason"`
 }
 
+type CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int                      `json:"prompt_tokens"`
+	CompletionTokens        int                      `json:"completion_tokens"`
+	TotalTokens             int                      `json:"total_tokens"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
 }
 
 type ChatResponse struct {
