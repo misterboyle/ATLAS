@@ -1549,6 +1549,15 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 
 	req.Model = modelName
 
+	// Structured output bypass: when client sends response_format (e.g.
+	// cogitor's json_schema grammar), skip pipeline paths -- their
+	// sub-requests don't propagate response_format, breaking grammar
+	// enforcement at the llama-server level. (atlas-src-laz)
+	skipPipeline := len(req.ResponseFormat) > 0
+	if skipPipeline {
+		log.Printf("  response_format set -- bypassing pipeline, streaming direct")
+	}
+
 	// For T2+: use the full V3 pipeline if service is available
 	// This gives the exact same pipeline that scored 74.6% on LiveCodeBench
 	// Double-request prevention: if last response was V3, skip V3 this time
@@ -1566,7 +1575,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	// file operations internally, then formats results for Aider's whole-file format.
 	// Enabled via ATLAS_AGENT_LOOP=1. For T2/T3, runs V3 pipeline inside write_file.
 	useAgentLoop := os.Getenv("ATLAS_AGENT_LOOP") == "1"
-	if useAgentLoop && !v3Cooldown {
+	if useAgentLoop && !v3Cooldown && !skipPipeline {
 		// Agent loop handles ALL tiers when enabled (including T0 conversational).
 		// Grammar enforcement prevents thinking blocks on all responses.
 		// Override tier with fast heuristic — LLM classifier over-classifies
@@ -1608,7 +1617,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	// V3 pipeline (legacy): direct V3 service call without agent loop.
 	// Available via ATLAS_V3_CLI=1. Superseded by ATLAS_AGENT_LOOP=1.
 	useV3CLI := os.Getenv("ATLAS_V3_CLI") == "1"
-	if useV3CLI && tier >= Tier2Medium && v3ServiceAvailable() && !v3Cooldown {
+	if useV3CLI && tier >= Tier2Medium && v3ServiceAvailable() && !v3Cooldown && !skipPipeline {
 		log.Printf("  V3 pipeline: routing to full pipeline service...")
 
 		// Extract the user's actual problem text
@@ -1689,7 +1698,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 
 	// Multi-file decomposition: if the user message mentions multiple files,
 	// generate them one at a time. Each call only formats one file.
-	if tier >= Tier1Simple {
+	if tier >= Tier1Simple && !skipPipeline {
 		// Extract ALL target filenames from the user message
 		targetFiles := []string{}
 		for _, msg := range req.Messages {
@@ -1800,7 +1809,7 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 
 	// For T1+ code tasks: buffer response, format-repair, then inject as SSE
 	// This ensures Aider sees properly formatted whole-file output
-	if tier >= Tier1Simple {
+	if tier >= Tier1Simple && !skipPipeline {
 		log.Printf("  buffered generation for format-repair...")
 		// Deep-copy messages so forwardToFox's /nothink injection doesn't
 		// mutate the original req.Messages (needed for filename extraction later)
