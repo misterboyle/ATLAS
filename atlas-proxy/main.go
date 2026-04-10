@@ -1580,9 +1580,11 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	if useAgentLoop && !v3Cooldown && !skipPipeline {
 		// Agent loop handles ALL tiers when enabled (including T0 conversational).
 		// Grammar enforcement prevents thinking blocks on all responses.
-		// Override tier with fast heuristic — LLM classifier over-classifies
-		// single-file creation as T3. The agent loop needs conservative tiers
-		// to avoid triggering V3 pipeline on simple tasks.
+		// Heuristic tier: fast keyword-based classification.
+		// Used as a floor -- can upgrade but never downgrade the LLM tier.
+		// Previously this replaced the LLM tier entirely, causing T3:hard
+		// tasks to be downgraded to T1:simple (81% code delivery failure
+		// in LCB benchmark). See docs/kb/lcb-full-benchmark-run1.md.
 		userMsg := ""
 		for i := len(req.Messages) - 1; i >= 0; i-- {
 			if req.Messages[i].Role == "user" {
@@ -1590,8 +1592,13 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 				break
 			}
 		}
-		tier = classifyAgentTier(userMsg)
-		log.Printf("  agent tier override: %s", tier)
+		heuristicTier := classifyAgentTier(userMsg)
+		if heuristicTier > tier {
+			log.Printf("  agent tier upgrade: %s -> %s (heuristic)", tier, heuristicTier)
+			tier = heuristicTier
+		} else {
+			log.Printf("  agent tier: %s (LLM), heuristic=%s", tier, heuristicTier)
+		}
 		log.Printf("  agent loop: running internal tool-call loop for %s...", tier)
 		agentResult := runInternalAgentLoop(req, tier, w, flusher)
 		if agentResult != nil && len(agentResult.FileChanges) > 0 {
