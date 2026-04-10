@@ -686,14 +686,51 @@ func recoverTruncatedWriteFile(partial string) (ModelResponse, error) {
 // V3 pipeline is expensive; only activate for genuinely complex tasks.
 func classifyAgentTier(message string) Tier {
 	lower := strings.ToLower(message)
+	trimmed := strings.TrimSpace(message)
 
-	// All messages go through the agent loop (even conversational).
-	// The agent loop handles grammar enforcement which prevents the model
-	// from outputting raw thinking blocks. Short messages still get T1
-	// so the loop runs with a low turn budget.
-	if len(strings.TrimSpace(message)) < 5 {
-		// Only truly empty/trivial messages get T0
+	// T0: Very short messages (hi, hey, ok, thx)
+	if len(trimmed) < 5 {
 		return Tier0Conversational
+	}
+
+	// T0: Conversational patterns -- greetings, thanks, farewells, acks.
+	// Only match for short messages (< 200 chars) to avoid false positives
+	// on messages like "hello, please implement a merge sort algorithm".
+	if len(trimmed) < 200 {
+		conversationalPrefixes := []string{
+			"hello", "hey there", "hey!", "howdy", "greetings",
+			"good morning", "good afternoon", "good evening", "good night",
+			"thank you", "thanks", "appreciate it",
+			"goodbye", "bye", "see you", "take care",
+			"who are you", "what are you", "what can you do",
+			"how are you", "how's it going", "hows it going",
+			"what's up", "whats up", "sup",
+			"yes", "no", "ok", "okay", "sure", "yep", "nope",
+			"got it", "understood", "sounds good", "no problem",
+			"nice", "cool", "great", "awesome", "perfect",
+		}
+		codingSignals := []string{
+			"create", "write", "build", "implement", "add", "fix",
+			"function", "class", "script", "program", "code",
+			"file", "module", "api", "bug", "error", "test",
+			"refactor", "optimize", "debug", "deploy",
+			".py", ".js", ".ts", ".go", ".rs",
+		}
+		for _, p := range conversationalPrefixes {
+			if strings.Contains(lower, p) {
+				hasCoding := false
+				for _, cs := range codingSignals {
+					if strings.Contains(lower, cs) {
+						hasCoding = true
+						break
+					}
+				}
+				if !hasCoding {
+					return Tier0Conversational
+				}
+				break // has coding signals, fall through to tier detection
+			}
+		}
 	}
 
 	// Count how many files/components are mentioned

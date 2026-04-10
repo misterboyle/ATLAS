@@ -1580,25 +1580,9 @@ func handleStreamingChat(w http.ResponseWriter, r *http.Request, req ChatRequest
 	if useAgentLoop && !v3Cooldown && !skipPipeline {
 		// Agent loop handles ALL tiers when enabled (including T0 conversational).
 		// Grammar enforcement prevents thinking blocks on all responses.
-		// Heuristic tier: fast keyword-based classification.
-		// Used as a floor -- can upgrade but never downgrade the LLM tier.
-		// Previously this replaced the LLM tier entirely, causing T3:hard
-		// tasks to be downgraded to T1:simple (81% code delivery failure
-		// in LCB benchmark). See docs/kb/lcb-full-benchmark-run1.md.
-		userMsg := ""
-		for i := len(req.Messages) - 1; i >= 0; i-- {
-			if req.Messages[i].Role == "user" {
-				userMsg = req.Messages[i].Content
-				break
-			}
-		}
-		heuristicTier := classifyAgentTier(userMsg)
-		if heuristicTier > tier {
-			log.Printf("  agent tier upgrade: %s -> %s (heuristic)", tier, heuristicTier)
-			tier = heuristicTier
-		} else {
-			log.Printf("  agent tier: %s (LLM), heuristic=%s", tier, heuristicTier)
-		}
+		// Use the LLM classification (classifyIntent) as-is.
+		// No heuristic override -- the model is the classifier.
+		// See docs/kb/lcb-full-benchmark-run1.md for history.
 		log.Printf("  agent loop: running internal tool-call loop for %s...", tier)
 		agentResult := runInternalAgentLoop(req, tier, w, flusher)
 		if agentResult != nil && len(agentResult.FileChanges) > 0 {
@@ -2840,8 +2824,12 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 		"what did you change", "what changed", "show me the diff",
 		"undo", "undo that", "revert", "revert that",
 	}
+	// Normalize: strip surrounding punctuation for flexible matching
+	normalized := strings.TrimRight(lowerTrimmed, "!?.,;:")
+	normalized = strings.TrimLeft(normalized, "!?.,;:")
+	normalized = strings.TrimSpace(normalized)
 	for _, pat := range t0Patterns {
-		if lowerTrimmed == pat || lowerTrimmed == pat+"!" || lowerTrimmed == pat+"." || lowerTrimmed == pat+"?" {
+		if normalized == pat {
 			return Tier0Conversational
 		}
 	}
@@ -2849,6 +2837,38 @@ func classifyIntent(ctx context.Context, messages []ChatMessage) Tier {
 	// Single word that's not a command → likely conversational
 	if !strings.Contains(trimmed, " ") && len(trimmed) < 15 {
 		return Tier0Conversational
+	}
+
+	// Greeting prefix: short messages starting with a greeting that
+	// don't contain coding signals ("hello, how are you?" but not
+	// "hello, please implement merge sort").
+	greetPrefixes := []string{
+		"hello", "hey", "hi ", "good morning", "good afternoon",
+		"good evening", "howdy", "greetings", "how are you",
+		"how's it going", "hows it going", "what's up", "whats up",
+		"thanks for", "thank you for",
+	}
+	if len(trimmed) < 80 {
+		for _, gp := range greetPrefixes {
+			if strings.HasPrefix(normalized, gp) {
+				codingWords := []string{
+					"write", "create", "implement", "fix", "build",
+					"add", "code", "function", "script", "file",
+					"program", "class", "module", "api", "bug",
+				}
+				hasCoding := false
+				for _, cw := range codingWords {
+					if strings.Contains(normalized, cw) {
+						hasCoding = true
+						break
+					}
+				}
+				if !hasCoding {
+					return Tier0Conversational
+				}
+				break
+			}
+		}
 	}
 
 	// File-context awareness: if Aider sent file contents, this is an edit (T1/T2)
